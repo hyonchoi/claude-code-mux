@@ -26,3 +26,6 @@ logs/
 
 # Other
 .serena
+
+.bg-shell/
+.claude/settings.local.json
