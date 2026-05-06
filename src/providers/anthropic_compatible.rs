@@ -1,4 +1,4 @@
-use super::{AnthropicProvider, ProviderResponse, error::ProviderError};
+use super::{AnthropicProvider, ProviderResponse, error::ProviderError, AuthType};
 use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse};
 use crate::auth::{TokenStore, OAuthClient, OAuthConfig};
 use async_trait::async_trait;
@@ -18,6 +18,8 @@ pub struct AnthropicCompatibleProvider {
     models: Vec<String>,
     /// Custom headers to add (e.g., "HTTP-Referer" for OpenRouter)
     custom_headers: Vec<(String, String)>,
+    /// Authentication type (ApiKey, OAuth, or Passthrough)
+    auth_type: AuthType,
     /// OAuth provider ID (if using OAuth instead of API key)
     oauth_provider: Option<String>,
     /// Token store for OAuth authentication
@@ -33,6 +35,27 @@ impl AnthropicCompatibleProvider {
         oauth_provider: Option<String>,
         token_store: Option<TokenStore>,
     ) -> Self {
+        Self::new_with_auth(
+            name,
+            api_key,
+            base_url,
+            models,
+            AuthType::ApiKey,
+            oauth_provider,
+            token_store,
+        )
+    }
+
+    /// Create with explicit auth type
+    pub fn new_with_auth(
+        name: String,
+        api_key: String,
+        base_url: String,
+        models: Vec<String>,
+        auth_type: AuthType,
+        oauth_provider: Option<String>,
+        token_store: Option<TokenStore>,
+    ) -> Self {
         Self {
             name,
             api_key,
@@ -40,6 +63,7 @@ impl AnthropicCompatibleProvider {
             client: Client::new(),
             models,
             custom_headers: Vec::new(),
+            auth_type,
             oauth_provider,
             token_store,
         }
@@ -55,6 +79,29 @@ impl AnthropicCompatibleProvider {
         oauth_provider: Option<String>,
         token_store: Option<TokenStore>,
     ) -> Self {
+        Self::with_headers_and_auth(
+            name,
+            api_key,
+            base_url,
+            models,
+            custom_headers,
+            AuthType::ApiKey,
+            oauth_provider,
+            token_store,
+        )
+    }
+
+    /// Create with custom headers and auth type
+    pub fn with_headers_and_auth(
+        name: String,
+        api_key: String,
+        base_url: String,
+        models: Vec<String>,
+        custom_headers: Vec<(String, String)>,
+        auth_type: AuthType,
+        oauth_provider: Option<String>,
+        token_store: Option<TokenStore>,
+    ) -> Self {
         Self {
             name,
             api_key,
@@ -62,6 +109,7 @@ impl AnthropicCompatibleProvider {
             client: Client::new(),
             models,
             custom_headers,
+            auth_type,
             oauth_provider,
             token_store,
         }
@@ -77,6 +125,13 @@ impl AnthropicCompatibleProvider {
                 ));
             }
             return Ok(token.to_string());
+        }
+
+        // Check if provider is configured for passthrough auth
+        if self.auth_type == AuthType::Passthrough {
+            return Err(ProviderError::AuthError(
+                "Passthrough auth requires token from request headers".to_string()
+            ));
         }
 
         if let Some(ref oauth_provider_id) = self.oauth_provider {
@@ -152,11 +207,22 @@ impl AnthropicCompatibleProvider {
 
     /// Create z.ai provider (Anthropic-compatible)
     pub fn zai(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::new(
+        Self::zai_with_auth(
+            api_key,
+            models,
+            AuthType::ApiKey,
+            token_store,
+        )
+    }
+
+    /// Create z.ai provider with auth type
+    pub fn zai_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+        Self::new_with_auth(
             "z.ai".to_string(),
             api_key,
             "https://api.z.ai/api/anthropic".to_string(),
             models,
+            auth_type,
             None,
             token_store,
         )
@@ -164,11 +230,22 @@ impl AnthropicCompatibleProvider {
 
     /// Create Minimax provider (Anthropic-compatible)
     pub fn minimax(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::new(
+        Self::minimax_with_auth(
+            api_key,
+            models,
+            AuthType::ApiKey,
+            token_store,
+        )
+    }
+
+    /// Create Minimax provider with auth type
+    pub fn minimax_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+        Self::new_with_auth(
             "minimax".to_string(),
             api_key,
             "https://api.minimax.io/anthropic".to_string(),
             models,
+            auth_type,
             None,
             token_store,
         )
@@ -176,11 +253,22 @@ impl AnthropicCompatibleProvider {
 
     /// Create ZenMux provider (Anthropic-compatible proxy)
     pub fn zenmux(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::new(
+        Self::zenmux_with_auth(
+            api_key,
+            models,
+            AuthType::ApiKey,
+            token_store,
+        )
+    }
+
+    /// Create ZenMux provider with auth type
+    pub fn zenmux_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+        Self::new_with_auth(
             "zenmux".to_string(),
             api_key,
             "https://zenmux.ai/api/anthropic".to_string(),
             models,
+            auth_type,
             None,
             token_store,
         )
@@ -188,11 +276,22 @@ impl AnthropicCompatibleProvider {
 
     /// Create Kimi For Coding provider (Anthropic-compatible)
     pub fn kimi_coding(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::new(
+        Self::kimi_coding_with_auth(
+            api_key,
+            models,
+            AuthType::ApiKey,
+            token_store,
+        )
+    }
+
+    /// Create Kimi For Coding provider with auth type
+    pub fn kimi_coding_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+        Self::new_with_auth(
             "kimi-coding".to_string(),
             api_key,
             "https://api.kimi.com/coding".to_string(),
             models,
+            auth_type,
             None,
             token_store,
         )
@@ -217,11 +316,17 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         // Set auth header based on OAuth vs API key
         if override_auth.is_some() || self.is_oauth() {
             req_builder = req_builder
-                .header("Authorization", format!("Bearer {}", auth_value))
-                .header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
+                .header("Authorization", format!("Bearer {}", auth_value));
             tracing::debug!("🔐 Using OAuth Bearer token for {}", self.name);
         } else {
             req_builder = req_builder.header("x-api-key", auth_value);
+        }
+
+        // Add anthropic-beta header if provided
+        if let Some(beta_header) = &request.anthropic_beta_header {
+            req_builder = req_builder.header("anthropic-beta", beta_header);
+        } else {
+            req_builder = req_builder.header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
         }
 
         // Add custom headers (for OpenRouter, etc.)
@@ -372,11 +477,17 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         // Set auth header based on OAuth vs API key
         if override_auth.is_some() || self.is_oauth() {
             req_builder = req_builder
-                .header("Authorization", format!("Bearer {}", auth_value))
-                .header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
+                .header("Authorization", format!("Bearer {}", auth_value));
             tracing::debug!("🔐 Using OAuth Bearer token for streaming on {}", self.name);
         } else {
             req_builder = req_builder.header("x-api-key", auth_value);
+        }
+
+        // Add anthropic-beta header if provided
+        if let Some(beta_header) = &request.anthropic_beta_header {
+            req_builder = req_builder.header("anthropic-beta", beta_header);
+        } else {
+            req_builder = req_builder.header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
         }
 
         // Add custom headers
