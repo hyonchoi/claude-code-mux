@@ -17,7 +17,7 @@ use axum::{
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use futures::stream::StreamExt;
 
 /// Application state shared across handlers
@@ -606,8 +606,15 @@ async fn handle_openai_chat_completions(
         if token.is_none() && has_bearer_prefix(&headers) {
             return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
         }
+        if token.is_none() && !has_bearer_prefix(&headers) {
+            debug!("🔑 CC CLI request has no Bearer header — passthrough skipped");
+        }
         token
     } else {
+        let ua = headers.get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("<none>");
+        debug!("🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped", ua);
         None
     };
 
@@ -811,8 +818,15 @@ async fn handle_messages(
         if token.is_none() && has_bearer_prefix(&headers) {
             return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
         }
+        if token.is_none() && !has_bearer_prefix(&headers) {
+            debug!("🔑 CC CLI request has no Bearer header — passthrough skipped");
+        }
         token
     } else {
+        let ua = headers.get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("<none>");
+        debug!("🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped", ua);
         None
     };
 
@@ -1047,10 +1061,21 @@ async fn handle_count_tokens(
         if token.is_none() && has_bearer_prefix(&headers) {
             return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
         }
+        if token.is_none() && !has_bearer_prefix(&headers) {
+            debug!("🔑 CC CLI count_tokens request has no Bearer header — passthrough skipped");
+        }
         token
     } else {
+        let ua = headers.get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("<none>");
+        debug!("🔑 Non-CC-CLI count_tokens request (User-Agent: '{}') — passthrough skipped", ua);
         None
     };
+
+    if passthrough_token.is_some() {
+        info!("🔑 Passthrough mode detected for count_tokens (caller-provided bearer token)");
+    }
 
     // 1. Parse as CountTokensRequest first
     use crate::models::CountTokensRequest;
@@ -1262,6 +1287,12 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
             if !token.chars().all(|c| {
                 c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | '+' | '/' | '=')
             }) {
+                // Log the first rejected character to help diagnose token format issues
+                if let Some(bad_char) = token.chars().find(|&c| {
+                    !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.' | '~' | '+' | '/' | '=')
+                }) {
+                    tracing::warn!("🔑 Bearer token rejected: contains disallowed character U+{:04X} — passthrough will not activate", bad_char as u32);
+                }
                 return None;
             }
             
