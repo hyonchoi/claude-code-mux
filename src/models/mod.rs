@@ -25,6 +25,9 @@ pub struct AnthropicRequest {
     pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    /// Caller-provided bearer token for passthrough mode. Never serialized.
+    #[serde(skip)]
+    pub passthrough_auth: Option<String>,
 }
 
 /// Message in the conversation

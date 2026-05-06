@@ -266,6 +266,7 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            passthrough_auth: None,
         }
     }
 

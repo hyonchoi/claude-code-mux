@@ -816,6 +816,7 @@ async fn handle_count_tokens(
         stop_sequences: None,
         stream: None,
         metadata: None,
+        passthrough_auth: None,
     };
     let decision = state
         .router
