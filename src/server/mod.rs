@@ -8,7 +8,7 @@ use crate::providers::ProviderRegistry;
 use crate::auth::TokenStore;
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{
         Html, IntoResponse, Response, sse::{Event, Sse},
     },
@@ -465,6 +465,53 @@ fn is_anthropic_provider(providers: &[crate::providers::ProviderConfig], name: &
         .find(|p| p.name == name)
         .map(|p| p.provider_type == "anthropic")
         .unwrap_or(false)
+}
+
+/// Detects Claude Code CLI requests via User-Agent header matching
+fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
+    if let Some(user_agent) = headers.get(header::USER_AGENT) {
+        if let Ok(ua_str) = user_agent.to_str() {
+            let ua_lower = ua_str.to_lowercase();
+            ua_lower.contains("claude-code/") || ua_lower.contains("claudedesktop/")
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+/// Parses anthropic-beta header in CSV format
+/// Returns list of beta options or error if invalid
+fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
+    let options = header_value
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    
+    if options.is_empty() {
+        return Err("anthropic-beta header is empty".to_string());
+    }
+    
+    Ok(options)
+}
+
+/// Validates anthropic-beta options against supported model options
+fn validate_anthropic_beta(
+    beta_options: &[String],
+    supported_options: &[String],
+    model_name: &str,
+) -> Result<(), String> {
+    for option in beta_options {
+        if !supported_options.contains(option) {
+            return Err(format!(
+                "Option '{}' not supported for model '{}'",
+                option, model_name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Handle /v1/chat/completions requests (OpenAI-compatible endpoint)
