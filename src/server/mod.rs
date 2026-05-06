@@ -458,6 +458,15 @@ start "" "{}" start --port {}
     Ok(())
 }
 
+/// Returns true if the named provider has provider_type == "anthropic".
+fn is_anthropic_provider(providers: &[crate::providers::ProviderConfig], name: &str) -> bool {
+    providers
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| p.provider_type == "anthropic")
+        .unwrap_or(false)
+}
+
 /// Handle /v1/chat/completions requests (OpenAI-compatible endpoint)
 async fn handle_openai_chat_completions(
     State(state): State<Arc<AppState>>,
@@ -467,9 +476,21 @@ async fn handle_openai_chat_completions(
     let model = openai_request.model.clone();
     info!("Received OpenAI-compatible request for model: {}", model);
 
+    let passthrough_token: Option<String> = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    if passthrough_token.is_some() {
+        info!("🔑 Passthrough mode detected (caller-provided bearer token)");
+    }
+
     // 1. Transform OpenAI request to Anthropic format
     let mut anthropic_request = openai_compat::transform_openai_to_anthropic(openai_request)
         .map_err(|e| AppError::ParseError(format!("Failed to transform OpenAI request: {}", e)))?;
+
+    anthropic_request.passthrough_auth = passthrough_token.clone();
 
     info!("Transformed OpenAI request to Anthropic format");
 
@@ -514,6 +535,15 @@ async fn handle_openai_chat_completions(
         } else {
             // Use priority ordering
             sorted_mappings.sort_by_key(|m| m.priority);
+        }
+
+        if passthrough_token.is_some() {
+            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            if sorted_mappings.is_empty() {
+                return Err(AppError::RoutingError(
+                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                ));
+            }
         }
 
         // Try each mapping in priority order (or just the forced one)
@@ -570,6 +600,12 @@ async fn handle_openai_chat_completions(
             decision.model_name
         )));
     } else {
+        if passthrough_token.is_some() {
+            return Err(AppError::RoutingError(
+                "Passthrough auth requires explicit [[models]] configuration".to_string()
+            ));
+        }
+
         // No model mapping found, try direct provider registry lookup (backward compatibility)
         if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
             info!("📦 Using provider from registry (direct lookup): {}", decision.model_name);
@@ -616,12 +652,25 @@ async fn handle_messages(
         tracing::debug!("📥 Incoming request body:\n{}", json_str);
     }
 
+    // Extract caller-provided bearer token for passthrough mode
+    let passthrough_token: Option<String> = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    if passthrough_token.is_some() {
+        info!("🔑 Passthrough mode detected (caller-provided bearer token)");
+    }
+
     // 1. Parse request for routing decision (mutable for tag extraction)
     let mut request_for_routing: AnthropicRequest = serde_json::from_value(request_json.clone())
         .map_err(|e| {
             tracing::error!("❌ Failed to parse request: {}", e);
             AppError::ParseError(format!("Invalid request format: {}", e))
         })?;
+
+    request_for_routing.passthrough_auth = passthrough_token.clone();
 
     // 2. Route the request (may modify system prompt to remove CCM-SUBAGENT-MODEL tag)
     let decision = state
@@ -666,6 +715,16 @@ async fn handle_messages(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
+        // In passthrough mode, restrict to anthropic-type providers only
+        if passthrough_token.is_some() {
+            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            if sorted_mappings.is_empty() {
+                return Err(AppError::RoutingError(
+                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                ));
+            }
+        }
+
         // Try each mapping in priority order (or just the forced one)
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
@@ -692,6 +751,13 @@ async fn handle_messages(
 
                 // Update system if modified during routing
                 anthropic_request.system = request_for_routing.system.clone();
+
+                // Propagate passthrough auth into per-provider request
+                anthropic_request.passthrough_auth = passthrough_token.clone();
+
+                if passthrough_token.is_some() {
+                    info!("🔑 Passthrough auth active: original_model={}, target_provider={}", original_model, mapping.provider);
+                }
 
                 // Check if streaming is requested
                 let is_streaming = anthropic_request.stream == Some(true);
@@ -752,6 +818,13 @@ async fn handle_messages(
             decision.model_name
         )));
     } else {
+        // Passthrough requires explicit model mappings to enforce provider-type filtering
+        if passthrough_token.is_some() {
+            return Err(AppError::RoutingError(
+                "Passthrough auth requires explicit [[models]] configuration".to_string()
+            ));
+        }
+
         // No model mapping found, try direct provider registry lookup (backward compatibility)
         if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
             info!("📦 Using provider from registry (direct lookup): {}", decision.model_name);
@@ -941,3 +1014,56 @@ impl std::fmt::Display for AppError {
 }
 
 impl std::error::Error for AppError {}
+
+#[cfg(test)]
+mod tests {
+    use crate::providers::ProviderConfig;
+    use super::is_anthropic_provider;
+
+    fn make_configs() -> Vec<ProviderConfig> {
+        vec![
+            ProviderConfig {
+                name: "ant1".to_string(),
+                provider_type: "anthropic".to_string(),
+                auth_type: Default::default(),
+                api_key: Some("k".to_string()),
+                oauth_provider: None,
+                project_id: None,
+                location: None,
+                base_url: None,
+                models: vec![],
+                enabled: Some(true),
+            },
+            ProviderConfig {
+                name: "oai1".to_string(),
+                provider_type: "openai".to_string(),
+                auth_type: Default::default(),
+                api_key: Some("k".to_string()),
+                oauth_provider: None,
+                project_id: None,
+                location: None,
+                base_url: None,
+                models: vec![],
+                enabled: Some(true),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_is_anthropic_provider_returns_true_for_anthropic_type() {
+        let configs = make_configs();
+        assert!(is_anthropic_provider(&configs, "ant1"));
+    }
+
+    #[test]
+    fn test_is_anthropic_provider_returns_false_for_openai_type() {
+        let configs = make_configs();
+        assert!(!is_anthropic_provider(&configs, "oai1"));
+    }
+
+    #[test]
+    fn test_is_anthropic_provider_returns_false_for_unknown_name() {
+        let configs = make_configs();
+        assert!(!is_anthropic_provider(&configs, "unknown"));
+    }
+}
