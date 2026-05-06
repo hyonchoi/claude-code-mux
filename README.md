@@ -61,6 +61,7 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 - 🤖 **Multi-Agent Support** - Dynamic model switching via `CCM-SUBAGENT-MODEL` tags
 - 📊 **Live Testing** - Built-in test interface to verify routing and responses
 - ⚙️ **Centralized Settings** - Dedicated Settings tab for regex pattern management
+- 🔑 **Bearer Token Passthrough** - Forward caller-provided authentication tokens to upstream providers (e.g., Claude Pro/Max via OAuth)
 
 ## Screenshots
 
@@ -729,6 +730,38 @@ provider = "openrouter"
 ```
 
 If z.ai fails, automatically falls back to OpenRouter. Works with all providers!
+
+### Bearer Token Passthrough
+
+You can forward your own authentication tokens through the relay to upstream providers. This is useful when you want to use your own OAuth credentials instead of the relay's internal API keys.
+
+**How It Works**:
+
+1. Include an `Authorization: Bearer <your-token>` header in your request to the relay
+2. The relay detects the bearer token and preserves it for upstream providers
+3. The token is forwarded to anthropic-type providers only (for security)
+4. Model routing and failover work normally
+
+**Example**:
+
+```bash
+# Pass your Claude Pro OAuth token through the relay
+curl -X POST http://127.0.0.1:13456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-oauth-token" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-opus-4",
+    "max_tokens": 1000,
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+**Security Notes**:
+- Bearer tokens are only forwarded to anthropic-type providers
+- Cross-provider fallback is disabled for passthrough requests (prevents token leakage)
+- Tokens are validated to prevent header injection attacks
+- For production use, encrypt the Authorization header in transit (use HTTPS)
 
 ## CLI Usage
 
