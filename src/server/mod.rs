@@ -574,8 +574,17 @@ async fn handle_openai_chat_completions(
     let model = openai_request.model.clone();
     info!("Received OpenAI-compatible request for model: {}", model);
 
-    // Extract and validate bearer token for passthrough mode
-    let passthrough_token = extract_bearer_token(&headers);
+    // Extract and validate bearer token for passthrough mode.
+    // Only CC CLI requests are eligible; a present-but-invalid Bearer header is rejected.
+    let passthrough_token = if is_claude_code_cli_request(&headers) {
+        let token = extract_bearer_token(&headers);
+        if token.is_none() && has_bearer_prefix(&headers) {
+            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+        }
+        token
+    } else {
+        None
+    };
 
     if passthrough_token.is_some() {
         info!("🔑 Passthrough mode detected (caller-provided bearer token)");
@@ -760,8 +769,17 @@ async fn handle_messages(
         tracing::debug!("📥 Incoming request body:\n{}", json_str);
     }
 
-    // Extract and validate bearer token for passthrough mode
-    let passthrough_token = extract_bearer_token(&headers);
+    // Extract and validate bearer token for passthrough mode.
+    // Only CC CLI requests are eligible; a present-but-invalid Bearer header is rejected.
+    let passthrough_token = if is_claude_code_cli_request(&headers) {
+        let token = extract_bearer_token(&headers);
+        if token.is_none() && has_bearer_prefix(&headers) {
+            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+        }
+        token
+    } else {
+        None
+    };
 
     if passthrough_token.is_some() {
         info!("🔑 Passthrough mode detected (caller-provided bearer token)");
@@ -976,10 +994,21 @@ async fn handle_messages(
 /// Handle /v1/messages/count_tokens requests
 async fn handle_count_tokens(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request_json): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
     let model = request_json.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
     info!("Received count_tokens request for model: {}", model);
+
+    let passthrough_token = if is_claude_code_cli_request(&headers) {
+        let token = extract_bearer_token(&headers);
+        if token.is_none() && has_bearer_prefix(&headers) {
+            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+        }
+        token
+    } else {
+        None
+    };
 
     // 1. Parse as CountTokensRequest first
     use crate::models::CountTokensRequest;
@@ -1000,7 +1029,7 @@ async fn handle_count_tokens(
         stop_sequences: None,
         stream: None,
         metadata: None,
-        passthrough_auth: None,
+        passthrough_auth: passthrough_token.clone(),
         anthropic_beta_header: None,
     };
     let decision = state
@@ -1020,6 +1049,15 @@ async fn handle_count_tokens(
         // Sort mappings by priority
         let mut sorted_mappings = model_config.mappings.clone();
         sorted_mappings.sort_by_key(|m| m.priority);
+
+        if passthrough_token.is_some() {
+            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            if sorted_mappings.is_empty() {
+                return Err(AppError::RoutingError(
+                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                ));
+            }
+        }
 
         // Try each mapping in priority order
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
@@ -1133,11 +1171,21 @@ impl std::error::Error for AppError {}
 /// Extract and validate Bearer token from Authorization header
 /// 
 /// Validates:
+/// Returns true if the Authorization header is present and starts with "Bearer ".
+/// Used to detect malformed bearer tokens (present but invalid) vs absent header.
+fn has_bearer_prefix(headers: &HeaderMap) -> bool {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.len() >= 7 && s[..7].eq_ignore_ascii_case("Bearer "))
+        .unwrap_or(false)
+}
+
 /// - Header exists and starts with "Bearer " (case-insensitive)
 /// - Token is non-empty after trimming
 /// - Token contains only valid characters (alphanumeric, dash, underscore, dot, tilde, plus, slash, equals)
 /// - Token length <= 8192 bytes
-/// 
+///
 /// Returns None if header is missing or invalid.
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     headers
