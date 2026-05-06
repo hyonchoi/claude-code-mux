@@ -76,6 +76,7 @@ criterion = "0.5"          # Benchmarking
 
 # Property Testing
 proptest = "1"
+tempfile = "3.27.0"
 
 [[bench]]
 name = "routing"
