@@ -514,6 +514,14 @@ fn validate_anthropic_beta(
     Ok(())
 }
 
+/// Filters provider list to Anthropic-type providers only
+fn filter_to_anthropic_providers(providers: &[crate::providers::ProviderConfig]) -> Vec<&crate::providers::ProviderConfig> {
+    providers
+        .iter()
+        .filter(|p| p.provider_type == "anthropic")
+        .collect()
+}
+
 /// Handle /v1/chat/completions requests (OpenAI-compatible endpoint)
 async fn handle_openai_chat_completions(
     State(state): State<Arc<AppState>>,
