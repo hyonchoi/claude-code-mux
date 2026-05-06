@@ -1066,4 +1066,42 @@ mod tests {
         let configs = make_configs();
         assert!(!is_anthropic_provider(&configs, "unknown"));
     }
+
+    #[test]
+    fn test_passthrough_filter_excludes_non_anthropic_mappings() {
+        use crate::cli::ModelMapping;
+
+        let configs = make_configs(); // ant1=anthropic, oai1=openai
+
+        let mappings = vec![
+            ModelMapping { provider: "ant1".to_string(), actual_model: "claude-opus-4-5".to_string(), priority: 1 },
+            ModelMapping { provider: "oai1".to_string(), actual_model: "gpt-4o".to_string(), priority: 2 },
+        ];
+
+        let filtered: Vec<_> = mappings
+            .into_iter()
+            .filter(|m| is_anthropic_provider(&configs, &m.provider))
+            .collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider, "ant1");
+    }
+
+    #[test]
+    fn test_passthrough_filter_empty_when_no_anthropic_mappings() {
+        use crate::cli::ModelMapping;
+
+        let configs = make_configs(); // ant1=anthropic, oai1=openai
+
+        let mappings = vec![
+            ModelMapping { provider: "oai1".to_string(), actual_model: "gpt-4o".to_string(), priority: 1 },
+        ];
+
+        let filtered: Vec<_> = mappings
+            .into_iter()
+            .filter(|m| is_anthropic_provider(&configs, &m.provider))
+            .collect();
+
+        assert!(filtered.is_empty());
+    }
 }
