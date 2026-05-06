@@ -267,6 +267,7 @@ mod tests {
             system: None,
             tools: None,
             passthrough_auth: None,
+            anthropic_beta_header: None,
         }
     }
 

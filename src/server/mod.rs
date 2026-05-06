@@ -883,6 +883,7 @@ async fn handle_count_tokens(
         stream: None,
         metadata: None,
         passthrough_auth: None,
+        anthropic_beta_header: None,
     };
     let decision = state
         .router

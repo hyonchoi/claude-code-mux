@@ -28,6 +28,9 @@ pub struct AnthropicRequest {
     /// Caller-provided bearer token for passthrough mode. Never serialized.
     #[serde(skip)]
     pub passthrough_auth: Option<String>,
+    /// anthropic-beta header value from incoming request. Never serialized.
+    #[serde(skip)]
+    pub anthropic_beta_header: Option<String>,
 }
 
 /// Message in the conversation
