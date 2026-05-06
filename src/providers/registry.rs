@@ -65,7 +65,7 @@ impl ProviderRegistry {
                 )),
 
                 // Anthropic-compatible providers
-                "anthropic" => Box::new(AnthropicCompatibleProvider::new_with_auth(
+                "anthropic" => Box::new(AnthropicCompatibleProvider::new_with_options_and_auth(
                     config.name.clone(),
                     api_key,
                     config.base_url.clone().unwrap_or_else(|| "https://api.anthropic.com".to_string()),
@@ -73,6 +73,7 @@ impl ProviderRegistry {
                     config.auth_type.clone(),
                     config.oauth_provider.clone(),
                     token_store.clone(),
+                    config.supported_beta_options.clone(),
                 )),
                 "z.ai" => Box::new(AnthropicCompatibleProvider::zai_with_auth(
                     api_key,

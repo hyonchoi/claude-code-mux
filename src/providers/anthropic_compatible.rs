@@ -1,6 +1,7 @@
 use super::{AnthropicProvider, ProviderResponse, error::ProviderError, AuthType};
 use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse};
 use crate::auth::{TokenStore, OAuthClient, OAuthConfig};
+use crate::server::{parse_anthropic_beta, validate_anthropic_beta};
 use async_trait::async_trait;
 use reqwest::Client;
 use std::pin::Pin;
@@ -25,6 +26,8 @@ pub struct AnthropicCompatibleProvider {
     oauth_provider: Option<String>,
     /// Token store for OAuth authentication
     token_store: Option<TokenStore>,
+    /// Supported anthropic-beta options for this provider
+    supported_beta_options: Vec<String>,
 }
 
 impl AnthropicCompatibleProvider {
@@ -36,14 +39,14 @@ impl AnthropicCompatibleProvider {
         oauth_provider: Option<String>,
         token_store: Option<TokenStore>,
     ) -> Self {
-        Self::new_with_auth(
+        Self::new_with_options(
             name,
             api_key,
             base_url,
             models,
-            AuthType::ApiKey,
             oauth_provider,
             token_store,
+            Vec::new(),
         )
     }
 
@@ -57,6 +60,29 @@ impl AnthropicCompatibleProvider {
         oauth_provider: Option<String>,
         token_store: Option<TokenStore>,
     ) -> Self {
+        Self::new_with_options_and_auth(
+            name,
+            api_key,
+            base_url,
+            models,
+            auth_type,
+            oauth_provider,
+            token_store,
+            Vec::new(),
+        )
+    }
+
+    /// Create with explicit auth type and supported beta options
+    pub fn new_with_options_and_auth(
+        name: String,
+        api_key: String,
+        base_url: String,
+        models: Vec<String>,
+        auth_type: AuthType,
+        oauth_provider: Option<String>,
+        token_store: Option<TokenStore>,
+        supported_beta_options: Vec<String>,
+    ) -> Self {
         Self {
             name,
             api_key,
@@ -67,7 +93,30 @@ impl AnthropicCompatibleProvider {
             auth_type,
             oauth_provider,
             token_store,
+            supported_beta_options,
         }
+    }
+
+    /// Create with supported beta options
+    pub fn new_with_options(
+        name: String,
+        api_key: String,
+        base_url: String,
+        models: Vec<String>,
+        oauth_provider: Option<String>,
+        token_store: Option<TokenStore>,
+        supported_beta_options: Vec<String>,
+    ) -> Self {
+        Self::new_with_options_and_auth(
+            name,
+            api_key,
+            base_url,
+            models,
+            AuthType::ApiKey,
+            oauth_provider,
+            token_store,
+            supported_beta_options,
+        )
     }
 
     /// Create with custom headers
@@ -103,6 +152,31 @@ impl AnthropicCompatibleProvider {
         oauth_provider: Option<String>,
         token_store: Option<TokenStore>,
     ) -> Self {
+        Self::with_headers_auth_and_options(
+            name,
+            api_key,
+            base_url,
+            models,
+            custom_headers,
+            auth_type,
+            oauth_provider,
+            token_store,
+            Vec::new(),
+        )
+    }
+
+    /// Create with custom headers, auth type, and supported beta options
+    pub fn with_headers_auth_and_options(
+        name: String,
+        api_key: String,
+        base_url: String,
+        models: Vec<String>,
+        custom_headers: Vec<(String, String)>,
+        auth_type: AuthType,
+        oauth_provider: Option<String>,
+        token_store: Option<TokenStore>,
+        supported_beta_options: Vec<String>,
+    ) -> Self {
         Self {
             name,
             api_key,
@@ -113,6 +187,7 @@ impl AnthropicCompatibleProvider {
             auth_type,
             oauth_provider,
             token_store,
+            supported_beta_options,
         }
     }
 
@@ -185,7 +260,7 @@ impl AnthropicCompatibleProvider {
 
     /// Create Anthropic Native provider with auth type
     pub fn anthropic_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType) -> Self {
-        Self::new_with_auth(
+        Self::new_with_options_and_auth(
             "anthropic".to_string(),
             api_key,
             "https://api.anthropic.com".to_string(),
@@ -193,6 +268,7 @@ impl AnthropicCompatibleProvider {
             auth_type,
             None,
             None,
+            Vec::new(),
         )
     }
 
@@ -203,7 +279,7 @@ impl AnthropicCompatibleProvider {
 
     /// Create OpenRouter provider with auth type
     pub fn openrouter_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType) -> Self {
-        Self::with_headers_and_auth(
+        Self::with_headers_auth_and_options(
             "openrouter".to_string(),
             api_key,
             "https://openrouter.ai/api".to_string(),
@@ -215,6 +291,7 @@ impl AnthropicCompatibleProvider {
             auth_type,
             None,
             None,
+            Vec::new(),
         )
     }
 
@@ -230,7 +307,7 @@ impl AnthropicCompatibleProvider {
 
     /// Create z.ai provider with auth type
     pub fn zai_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
-        Self::new_with_auth(
+        Self::new_with_options_and_auth(
             "z.ai".to_string(),
             api_key,
             "https://api.z.ai/api/anthropic".to_string(),
@@ -238,6 +315,7 @@ impl AnthropicCompatibleProvider {
             auth_type,
             None,
             token_store,
+            Vec::new(),
         )
     }
 
@@ -253,7 +331,7 @@ impl AnthropicCompatibleProvider {
 
     /// Create Minimax provider with auth type
     pub fn minimax_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
-        Self::new_with_auth(
+        Self::new_with_options_and_auth(
             "minimax".to_string(),
             api_key,
             "https://api.minimax.io/anthropic".to_string(),
@@ -261,6 +339,7 @@ impl AnthropicCompatibleProvider {
             auth_type,
             None,
             token_store,
+            Vec::new(),
         )
     }
 
@@ -276,7 +355,7 @@ impl AnthropicCompatibleProvider {
 
     /// Create ZenMux provider with auth type
     pub fn zenmux_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
-        Self::new_with_auth(
+        Self::new_with_options_and_auth(
             "zenmux".to_string(),
             api_key,
             "https://zenmux.ai/api/anthropic".to_string(),
@@ -284,6 +363,7 @@ impl AnthropicCompatibleProvider {
             auth_type,
             None,
             token_store,
+            Vec::new(),
         )
     }
 
@@ -299,7 +379,7 @@ impl AnthropicCompatibleProvider {
 
     /// Create Kimi For Coding provider with auth type
     pub fn kimi_coding_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
-        Self::new_with_auth(
+        Self::new_with_options_and_auth(
             "kimi-coding".to_string(),
             api_key,
             "https://api.kimi.com/coding".to_string(),
@@ -307,6 +387,7 @@ impl AnthropicCompatibleProvider {
             auth_type,
             None,
             token_store,
+            Vec::new(),
         )
     }
 }
@@ -337,8 +418,40 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
-            debug!("{}: using custom beta options from request: {}", self.name, beta_header);
-            req_builder = req_builder.header("anthropic-beta", beta_header);
+            debug!("{}: custom beta options provided, parsing and validating: {}", self.name, beta_header);
+            
+            // Parse the beta header (CSV format → individual options)
+            match parse_anthropic_beta(beta_header) {
+                Ok(parsed_options) => {
+                    // Validate options if provider has a supported list
+                    if !self.supported_beta_options.is_empty() {
+                        match validate_anthropic_beta(&parsed_options, &self.supported_beta_options, &request.model) {
+                            Ok(()) => {
+                                debug!("{}: beta options validated successfully for model '{}'", self.name, request.model);
+                                req_builder = req_builder.header("anthropic-beta", beta_header);
+                            }
+                            Err(validation_error) => {
+                                warn!("{}: beta validation failed for model '{}': {}", self.name, request.model, validation_error);
+                                // Fall back to defaults on validation failure
+                                let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
+                                debug!("{}: falling back to defaults", self.name);
+                                req_builder = req_builder.header("anthropic-beta", default_beta);
+                            }
+                        }
+                    } else {
+                        // No supported list configured, accept the header as-is
+                        debug!("{}: no supported options list configured, accepting beta header as-is", self.name);
+                        req_builder = req_builder.header("anthropic-beta", beta_header);
+                    }
+                }
+                Err(parse_error) => {
+                    warn!("{}: failed to parse beta header: {}", self.name, parse_error);
+                    // Fall back to defaults on parse failure
+                    let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
+                    debug!("{}: falling back to defaults", self.name);
+                    req_builder = req_builder.header("anthropic-beta", default_beta);
+                }
+            }
         } else {
             let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
             debug!("{}: no custom beta options, using defaults: {}", self.name, default_beta);
@@ -501,8 +614,40 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
-            debug!("{}: using custom beta options from request: {}", self.name, beta_header);
-            req_builder = req_builder.header("anthropic-beta", beta_header);
+            debug!("{}: custom beta options provided, parsing and validating: {}", self.name, beta_header);
+            
+            // Parse the beta header (CSV format → individual options)
+            match parse_anthropic_beta(beta_header) {
+                Ok(parsed_options) => {
+                    // Validate options if provider has a supported list
+                    if !self.supported_beta_options.is_empty() {
+                        match validate_anthropic_beta(&parsed_options, &self.supported_beta_options, &request.model) {
+                            Ok(()) => {
+                                debug!("{}: beta options validated successfully for model '{}'", self.name, request.model);
+                                req_builder = req_builder.header("anthropic-beta", beta_header);
+                            }
+                            Err(validation_error) => {
+                                warn!("{}: beta validation failed for model '{}': {}", self.name, request.model, validation_error);
+                                // Fall back to defaults on validation failure
+                                let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
+                                debug!("{}: falling back to defaults", self.name);
+                                req_builder = req_builder.header("anthropic-beta", default_beta);
+                            }
+                        }
+                    } else {
+                        // No supported list configured, accept the header as-is
+                        debug!("{}: no supported options list configured, accepting beta header as-is", self.name);
+                        req_builder = req_builder.header("anthropic-beta", beta_header);
+                    }
+                }
+                Err(parse_error) => {
+                    warn!("{}: failed to parse beta header: {}", self.name, parse_error);
+                    // Fall back to defaults on parse failure
+                    let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
+                    debug!("{}: falling back to defaults", self.name);
+                    req_builder = req_builder.header("anthropic-beta", default_beta);
+                }
+            }
         } else {
             let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
             debug!("{}: no custom beta options, using defaults: {}", self.name, default_beta);
