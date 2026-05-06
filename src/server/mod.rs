@@ -491,9 +491,11 @@ pub fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
         .collect::<Vec<_>>();
     
     if options.is_empty() {
+        tracing::debug!("parse_anthropic_beta: empty header value provided");
         return Err("anthropic-beta header is empty".to_string());
     }
     
+    tracing::debug!("parse_anthropic_beta: parsed {} options: {:?}", options.len(), options);
     Ok(options)
 }
 
@@ -503,14 +505,28 @@ pub fn validate_anthropic_beta(
     supported_options: &[String],
     model_name: &str,
 ) -> Result<(), String> {
+    tracing::debug!(
+        "validate_anthropic_beta: checking {} options for model '{}' (supported: {:?})",
+        beta_options.len(),
+        model_name,
+        supported_options
+    );
+    
     for option in beta_options {
         if !supported_options.contains(option) {
+            tracing::warn!(
+                "validate_anthropic_beta: option '{}' not in supported list for model '{}'",
+                option,
+                model_name
+            );
             return Err(format!(
                 "Option '{}' not supported for model '{}'",
                 option, model_name
             ));
         }
     }
+    
+    tracing::debug!("validate_anthropic_beta: all {} options valid for model '{}'", beta_options.len(), model_name);
     Ok(())
 }
 

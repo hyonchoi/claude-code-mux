@@ -6,6 +6,7 @@ use reqwest::Client;
 use std::pin::Pin;
 use futures::stream::Stream;
 use bytes::Bytes;
+use tracing::{debug, warn};
 
 /// Generic Anthropic-compatible provider
 /// Works with: Anthropic, OpenRouter, z.ai, Minimax, etc.
@@ -336,9 +337,12 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
+            debug!("{}: using custom beta options from request: {}", self.name, beta_header);
             req_builder = req_builder.header("anthropic-beta", beta_header);
         } else {
-            req_builder = req_builder.header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
+            let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
+            debug!("{}: no custom beta options, using defaults: {}", self.name, default_beta);
+            req_builder = req_builder.header("anthropic-beta", default_beta);
         }
 
         // Add custom headers (for OpenRouter, etc.)
@@ -497,9 +501,12 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
+            debug!("{}: using custom beta options from request: {}", self.name, beta_header);
             req_builder = req_builder.header("anthropic-beta", beta_header);
         } else {
-            req_builder = req_builder.header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
+            let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
+            debug!("{}: no custom beta options, using defaults: {}", self.name, default_beta);
+            req_builder = req_builder.header("anthropic-beta", default_beta);
         }
 
         // Add custom headers

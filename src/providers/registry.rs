@@ -199,8 +199,21 @@ impl ProviderRegistry {
             // Model mappings are now defined in [[models]] section
             // We only register the provider by name
 
-            // Add provider to registry
-            registry.providers.insert(config.name.clone(), Arc::new(provider));
+            // Add provider to registry with debug logging
+            let provider_name = config.name.clone();
+            let beta_options = &config.supported_beta_options;
+            
+            if !beta_options.is_empty() {
+                tracing::debug!(
+                    "registering provider '{}': supported beta options: {:?}",
+                    provider_name,
+                    beta_options
+                );
+            } else {
+                tracing::debug!("registering provider '{}': no specific beta options configured", provider_name);
+            }
+            
+            registry.providers.insert(provider_name, Arc::new(provider));
         }
 
         Ok(registry)
