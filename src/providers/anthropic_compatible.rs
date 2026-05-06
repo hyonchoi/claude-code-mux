@@ -179,11 +179,17 @@ impl AnthropicCompatibleProvider {
 
     /// Create Anthropic Native provider
     pub fn anthropic(api_key: String, models: Vec<String>) -> Self {
-        Self::new(
+        Self::anthropic_with_auth(api_key, models, AuthType::ApiKey)
+    }
+
+    /// Create Anthropic Native provider with auth type
+    pub fn anthropic_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType) -> Self {
+        Self::new_with_auth(
             "anthropic".to_string(),
             api_key,
             "https://api.anthropic.com".to_string(),
             models,
+            auth_type,
             None,
             None,
         )
@@ -191,7 +197,12 @@ impl AnthropicCompatibleProvider {
 
     /// Create OpenRouter provider
     pub fn openrouter(api_key: String, models: Vec<String>) -> Self {
-        Self::with_headers(
+        Self::openrouter_with_auth(api_key, models, AuthType::ApiKey)
+    }
+
+    /// Create OpenRouter provider with auth type
+    pub fn openrouter_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType) -> Self {
+        Self::with_headers_and_auth(
             "openrouter".to_string(),
             api_key,
             "https://openrouter.ai/api".to_string(),
@@ -200,6 +211,7 @@ impl AnthropicCompatibleProvider {
                 ("HTTP-Referer".to_string(), "https://github.com/bahkchanhee/claude-code-mux".to_string()),
                 ("X-Title".to_string(), "Claude Code Mux".to_string()),
             ],
+            auth_type,
             None,
             None,
         )
