@@ -2752,6 +2752,18 @@
                                         <input type="text" name="mappings[${index}][actual_model]" class="input-field font-mono" value="${escapeHtml(mapping.actual_model)}" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                                         <div class="helper-text">The actual model ID used by the provider</div>
                                     </div>
+                                    <div>
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="checkbox" name="mappings[${index}][strip_beta_options]" class="rounded" ${mapping.strip_beta_options ? 'checked' : ''}>
+                                            <span class="font-medium">Strip all beta options</span>
+                                        </label>
+                                        <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
+                                    </div>
+                                    <div>
+                                        <label class="label">Specific beta options to strip</label>
+                                        <input type="text" name="mappings[${index}][strip_specific_beta]" class="input-field font-mono" value="${mapping.strip_specific_beta ? mapping.strip_specific_beta.join(', ') : ''}" placeholder="e.g., prompt-caching, interleaved-thinking">
+                                        <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
+                                    </div>
                                 </div>
                             `;
                         } else {
@@ -2791,6 +2803,18 @@
                                         <label class="label">Model Name</label>
                                         <input type="text" name="mappings[${index}][actual_model]" class="input-field font-mono" value="${escapeHtml(mapping.actual_model)}" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                                         <div class="helper-text">The actual model ID used by the provider</div>
+                                    </div>
+                                    <div>
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="checkbox" name="mappings[${index}][strip_beta_options]" class="rounded" ${mapping.strip_beta_options ? 'checked' : ''}>
+                                            <span class="font-medium">Strip all beta options</span>
+                                        </label>
+                                        <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
+                                    </div>
+                                    <div>
+                                        <label class="label">Specific beta options to strip</label>
+                                        <input type="text" name="mappings[${index}][strip_specific_beta]" class="input-field font-mono" value="${mapping.strip_specific_beta ? mapping.strip_specific_beta.join(', ') : ''}" placeholder="e.g., prompt-caching, interleaved-thinking">
+                                        <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
                                     </div>
                                 </div>
                             `;
@@ -2849,6 +2873,18 @@
                             <label class="label">Model Name</label>
                             <input type="text" name="mappings[0][actual_model]" class="input-field font-mono" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                             <div class="helper-text">The actual model ID used by the provider</div>
+                        </div>
+                        <div>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" name="mappings[0][strip_beta_options]" class="rounded">
+                                <span class="font-medium">Strip all beta options</span>
+                            </label>
+                            <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
+                        </div>
+                        <div>
+                            <label class="label">Specific beta options to strip</label>
+                            <input type="text" name="mappings[0][strip_specific_beta]" class="input-field font-mono" placeholder="e.g., prompt-caching, interleaved-thinking">
+                            <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
                         </div>
                     </div>
                 </div>
@@ -2942,6 +2978,18 @@
                         <label class="label">Model Name</label>
                         <input type="text" name="mappings[${priority - 1}][actual_model]" class="input-field font-mono" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                         <div class="helper-text">The actual model ID used by the provider</div>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="mappings[${priority - 1}][strip_beta_options]" class="rounded">
+                            <span class="font-medium">Strip all beta options</span>
+                        </label>
+                        <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
+                    </div>
+                    <div>
+                        <label class="label">Specific beta options to strip</label>
+                        <input type="text" name="mappings[${priority - 1}][strip_specific_beta]" class="input-field font-mono" placeholder="e.g., prompt-caching, interleaved-thinking">
+                        <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
                     </div>
                 </div>
             `;
@@ -3268,11 +3316,22 @@
                             const actualModel = formData
                                 .get(`mappings[${index}][actual_model]`)
                                 ?.trim();
+                            const stripBetaOptions = formData
+                                .get(`mappings[${index}][strip_beta_options]`) === "on";
+                            const stripSpecificBetaStr = formData
+                                .get(`mappings[${index}][strip_specific_beta]`)
+                                ?.trim();
+                            const stripSpecificBeta = stripSpecificBetaStr
+                                ? stripSpecificBetaStr.split(',').map(s => s.trim()).filter(s => s)
+                                : [];
+                            
                             if (provider && actualModel) {
                                 mappings.push({
                                     priority: index + 1,
                                     provider: provider,
                                     actual_model: actualModel,
+                                    strip_beta_options: stripBetaOptions,
+                                    strip_specific_beta: stripSpecificBeta,
                                 });
                             }
                         });
