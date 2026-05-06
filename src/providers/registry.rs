@@ -65,32 +65,37 @@ impl ProviderRegistry {
                 )),
 
                 // Anthropic-compatible providers
-                "anthropic" => Box::new(AnthropicCompatibleProvider::new(
+                "anthropic" => Box::new(AnthropicCompatibleProvider::new_with_auth(
                     config.name.clone(),
                     api_key,
                     config.base_url.clone().unwrap_or_else(|| "https://api.anthropic.com".to_string()),
                     config.models.clone(),
+                    config.auth_type.clone(),
                     config.oauth_provider.clone(),
                     token_store.clone(),
                 )),
-                "z.ai" => Box::new(AnthropicCompatibleProvider::zai(
+                "z.ai" => Box::new(AnthropicCompatibleProvider::zai_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
-                "minimax" => Box::new(AnthropicCompatibleProvider::minimax(
+                "minimax" => Box::new(AnthropicCompatibleProvider::minimax_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
-                "zenmux" => Box::new(AnthropicCompatibleProvider::zenmux(
+                "zenmux" => Box::new(AnthropicCompatibleProvider::zenmux_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
-                "kimi-coding" => Box::new(AnthropicCompatibleProvider::kimi_coding(
+                "kimi-coding" => Box::new(AnthropicCompatibleProvider::kimi_coding_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
 

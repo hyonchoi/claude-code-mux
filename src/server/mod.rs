@@ -468,7 +468,7 @@ fn is_anthropic_provider(providers: &[crate::providers::ProviderConfig], name: &
 }
 
 /// Detects Claude Code CLI requests via User-Agent header matching
-fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
+pub fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
     if let Some(user_agent) = headers.get(header::USER_AGENT) {
         if let Ok(ua_str) = user_agent.to_str() {
             let ua_lower = ua_str.to_lowercase();
@@ -483,7 +483,7 @@ fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
 
 /// Parses anthropic-beta header in CSV format
 /// Returns list of beta options or error if invalid
-fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
+pub fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
     let options = header_value
         .split(',')
         .map(|s| s.trim().to_string())
@@ -498,7 +498,7 @@ fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
 }
 
 /// Validates anthropic-beta options against supported model options
-fn validate_anthropic_beta(
+pub fn validate_anthropic_beta(
     beta_options: &[String],
     supported_options: &[String],
     model_name: &str,
