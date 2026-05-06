@@ -595,6 +595,10 @@ async fn handle_openai_chat_completions(
         .map_err(|e| AppError::ParseError(format!("Failed to transform OpenAI request: {}", e)))?;
 
     anthropic_request.passthrough_auth = passthrough_token.clone();
+    anthropic_request.anthropic_beta_header = headers
+        .get("anthropic-beta")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
 
     info!("Transformed OpenAI request to Anthropic format");
 
@@ -785,6 +789,11 @@ async fn handle_messages(
         info!("🔑 Passthrough mode detected (caller-provided bearer token)");
     }
 
+    let incoming_beta_header = headers
+        .get("anthropic-beta")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
     // 1. Parse request for routing decision (mutable for tag extraction)
     let mut request_for_routing: AnthropicRequest = serde_json::from_value(request_json.clone())
         .map_err(|e| {
@@ -793,6 +802,7 @@ async fn handle_messages(
         })?;
 
     request_for_routing.passthrough_auth = passthrough_token.clone();
+    request_for_routing.anthropic_beta_header = incoming_beta_header.clone();
 
     // 2. Route the request (may modify system prompt to remove CCM-SUBAGENT-MODEL tag)
     let decision = state
@@ -881,8 +891,9 @@ async fn handle_messages(
                 // Update system if modified during routing
                 anthropic_request.system = request_for_routing.system.clone();
 
-                // Propagate passthrough auth into per-provider request
+                // Propagate passthrough auth and beta header into per-provider request
                 anthropic_request.passthrough_auth = passthrough_token.clone();
+                anthropic_request.anthropic_beta_header = incoming_beta_header.clone();
 
                 if passthrough_token.is_some() {
                     info!("🔑 Passthrough auth active: original_model={}, target_provider={}", original_model, mapping.provider);
