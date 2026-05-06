@@ -507,7 +507,7 @@ pub fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
     if let Some(user_agent) = headers.get(header::USER_AGENT) {
         if let Ok(ua_str) = user_agent.to_str() {
             let ua_lower = ua_str.to_lowercase();
-            ua_lower.contains("claude-code/") || ua_lower.contains("claudedesktop/")
+            ua_lower.contains("claude-code/") || ua_lower.contains("claude-cli/") || ua_lower.contains("claudedesktop/")
         } else {
             false
         }

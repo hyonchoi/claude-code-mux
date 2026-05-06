@@ -34,6 +34,16 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_cli_detection_with_version() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::USER_AGENT,
+            "claude-cli/1.2.3".parse().unwrap(),
+        );
+        assert!(is_claude_code_cli_request(&headers));
+    }
+
+    #[test]
     fn test_non_cli_user_agent() {
         let mut headers = HeaderMap::new();
         headers.insert(
