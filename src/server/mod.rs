@@ -519,6 +519,8 @@ pub fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
 /// Parses anthropic-beta header in CSV format
 /// Returns list of beta options or error if invalid
 pub fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
+    tracing::debug!("parse_anthropic_beta: starting parse of header: '{}'", header_value);
+    
     let options = header_value
         .split(',')
         .map(|s| s.trim().to_string())
@@ -526,11 +528,15 @@ pub fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
         .collect::<Vec<_>>();
     
     if options.is_empty() {
-        tracing::debug!("parse_anthropic_beta: empty header value provided");
+        tracing::debug!("parse_anthropic_beta: empty header value provided (header_value='{}')", header_value);
         return Err("anthropic-beta header is empty".to_string());
     }
     
-    tracing::debug!("parse_anthropic_beta: parsed {} options: {:?}", options.len(), options);
+    tracing::debug!("parse_anthropic_beta: parsed {} options from header", options.len());
+    for (i, option) in options.iter().enumerate() {
+        tracing::debug!("parse_anthropic_beta: option[{}] = '{}'", i, option);
+    }
+    tracing::debug!("parse_anthropic_beta: parsed options: {:?}", options);
     Ok(options)
 }
 
@@ -541,27 +547,46 @@ pub fn validate_anthropic_beta(
     model_name: &str,
 ) -> Result<(), String> {
     tracing::debug!(
-        "validate_anthropic_beta: checking {} options for model '{}' (supported: {:?})",
-        beta_options.len(),
+        "validate_anthropic_beta: starting validation for model '{}' with {} requested options",
+        model_name,
+        beta_options.len()
+    );
+    tracing::debug!(
+        "validate_anthropic_beta: supported options for model '{}': {:?}",
         model_name,
         supported_options
     );
     
-    for option in beta_options {
+    for (i, option) in beta_options.iter().enumerate() {
+        tracing::debug!(
+            "validate_anthropic_beta: checking option[{}] = '{}' for model '{}'",
+            i,
+            option,
+            model_name
+        );
+        
         if !supported_options.contains(option) {
             tracing::warn!(
-                "validate_anthropic_beta: option '{}' not in supported list for model '{}'",
+                "validate_anthropic_beta: option '{}' NOT found in supported list for model '{}'. Supported options: {:?}",
                 option,
-                model_name
+                model_name,
+                supported_options
             );
             return Err(format!(
                 "Option '{}' not supported for model '{}'",
                 option, model_name
             ));
         }
+        
+        tracing::debug!(
+            "validate_anthropic_beta: option[{}] '{}' is VALID for model '{}'",
+            i,
+            option,
+            model_name
+        );
     }
     
-    tracing::debug!("validate_anthropic_beta: all {} options valid for model '{}'", beta_options.len(), model_name);
+    tracing::debug!("validate_anthropic_beta: ALL {} options VALIDATED successfully for model '{}'", beta_options.len(), model_name);
     Ok(())
 }
 
@@ -599,6 +624,12 @@ async fn handle_openai_chat_completions(
         .get("anthropic-beta")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
+    
+    if let Some(ref beta_header) = anthropic_request.anthropic_beta_header {
+        tracing::debug!("OpenAI request handler: extracted anthropic-beta header: '{}'", beta_header);
+    } else {
+        tracing::debug!("OpenAI request handler: no anthropic-beta header found in request");
+    }
 
     info!("Transformed OpenAI request to Anthropic format");
 

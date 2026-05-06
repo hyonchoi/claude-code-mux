@@ -418,43 +418,50 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
-            debug!("{}: custom beta options provided, parsing and validating: {}", self.name, beta_header);
+            debug!("{}: custom beta options provided, parsing and validating: '{}'", self.name, beta_header);
             
             // Parse the beta header (CSV format → individual options)
             match parse_anthropic_beta(beta_header) {
                 Ok(parsed_options) => {
+                    debug!("{}: parse_anthropic_beta succeeded, got {} options", self.name, parsed_options.len());
+                    
                     // Validate options if provider has a supported list
                     if !self.supported_beta_options.is_empty() {
+                        debug!("{}: provider has {} supported beta options, validating against model '{}'", 
+                               self.name, self.supported_beta_options.len(), request.model);
+                        
                         match validate_anthropic_beta(&parsed_options, &self.supported_beta_options, &request.model) {
                             Ok(()) => {
-                                debug!("{}: beta options validated successfully for model '{}'", self.name, request.model);
+                                debug!("{}: beta options VALIDATED successfully for model '{}', applying header", 
+                                       self.name, request.model);
                                 req_builder = req_builder.header("anthropic-beta", beta_header);
                             }
                             Err(validation_error) => {
-                                warn!("{}: beta validation failed for model '{}': {}", self.name, request.model, validation_error);
+                                warn!("{}: beta VALIDATION FAILED for model '{}': {}. Falling back to defaults", 
+                                      self.name, request.model, validation_error);
                                 // Fall back to defaults on validation failure
                                 let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                                debug!("{}: falling back to defaults", self.name);
+                                debug!("{}: applying default beta header: '{}'", self.name, default_beta);
                                 req_builder = req_builder.header("anthropic-beta", default_beta);
                             }
                         }
                     } else {
                         // No supported list configured, accept the header as-is
-                        debug!("{}: no supported options list configured, accepting beta header as-is", self.name);
+                        debug!("{}: provider has NO supported beta options list configured, accepting header as-is", self.name);
                         req_builder = req_builder.header("anthropic-beta", beta_header);
                     }
                 }
                 Err(parse_error) => {
-                    warn!("{}: failed to parse beta header: {}", self.name, parse_error);
+                    warn!("{}: parse_anthropic_beta FAILED: {}. Falling back to defaults", self.name, parse_error);
                     // Fall back to defaults on parse failure
                     let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                    debug!("{}: falling back to defaults", self.name);
+                    debug!("{}: applying default beta header: '{}'", self.name, default_beta);
                     req_builder = req_builder.header("anthropic-beta", default_beta);
                 }
             }
         } else {
             let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-            debug!("{}: no custom beta options, using defaults: {}", self.name, default_beta);
+            debug!("{}: no anthropic-beta header in request, using defaults: '{}'", self.name, default_beta);
             req_builder = req_builder.header("anthropic-beta", default_beta);
         }
 
@@ -614,43 +621,50 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
-            debug!("{}: custom beta options provided, parsing and validating: {}", self.name, beta_header);
+            debug!("{} [stream]: custom beta options provided, parsing and validating: '{}'", self.name, beta_header);
             
             // Parse the beta header (CSV format → individual options)
             match parse_anthropic_beta(beta_header) {
                 Ok(parsed_options) => {
+                    debug!("{} [stream]: parse_anthropic_beta succeeded, got {} options", self.name, parsed_options.len());
+                    
                     // Validate options if provider has a supported list
                     if !self.supported_beta_options.is_empty() {
+                        debug!("{} [stream]: provider has {} supported beta options, validating against model '{}'", 
+                               self.name, self.supported_beta_options.len(), request.model);
+                        
                         match validate_anthropic_beta(&parsed_options, &self.supported_beta_options, &request.model) {
                             Ok(()) => {
-                                debug!("{}: beta options validated successfully for model '{}'", self.name, request.model);
+                                debug!("{} [stream]: beta options VALIDATED successfully for model '{}', applying header", 
+                                       self.name, request.model);
                                 req_builder = req_builder.header("anthropic-beta", beta_header);
                             }
                             Err(validation_error) => {
-                                warn!("{}: beta validation failed for model '{}': {}", self.name, request.model, validation_error);
+                                warn!("{} [stream]: beta VALIDATION FAILED for model '{}': {}. Falling back to defaults", 
+                                      self.name, request.model, validation_error);
                                 // Fall back to defaults on validation failure
                                 let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                                debug!("{}: falling back to defaults", self.name);
+                                debug!("{} [stream]: applying default beta header: '{}'", self.name, default_beta);
                                 req_builder = req_builder.header("anthropic-beta", default_beta);
                             }
                         }
                     } else {
                         // No supported list configured, accept the header as-is
-                        debug!("{}: no supported options list configured, accepting beta header as-is", self.name);
+                        debug!("{} [stream]: provider has NO supported beta options list configured, accepting header as-is", self.name);
                         req_builder = req_builder.header("anthropic-beta", beta_header);
                     }
                 }
                 Err(parse_error) => {
-                    warn!("{}: failed to parse beta header: {}", self.name, parse_error);
+                    warn!("{} [stream]: parse_anthropic_beta FAILED: {}. Falling back to defaults", self.name, parse_error);
                     // Fall back to defaults on parse failure
                     let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                    debug!("{}: falling back to defaults", self.name);
+                    debug!("{} [stream]: applying default beta header: '{}'", self.name, default_beta);
                     req_builder = req_builder.header("anthropic-beta", default_beta);
                 }
             }
         } else {
             let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-            debug!("{}: no custom beta options, using defaults: {}", self.name, default_beta);
+            debug!("{} [stream]: no anthropic-beta header in request, using defaults: '{}'", self.name, default_beta);
             req_builder = req_builder.header("anthropic-beta", default_beta);
         }
 
