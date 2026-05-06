@@ -31,7 +31,7 @@ impl ProviderRegistry {
                 continue;
             }
 
-            // Get API key - required for API key auth, skipped for OAuth
+            // Get API key - required for API key auth, skipped for OAuth and Passthrough
             let api_key = match &config.auth_type {
                 super::AuthType::ApiKey => {
                     config.api_key.clone().ok_or_else(|| {
@@ -44,6 +44,11 @@ impl ProviderRegistry {
                     // OAuth providers will handle authentication differently
                     // For now, use a placeholder - will be replaced with token
                     config.oauth_provider.clone().unwrap_or_else(|| config.name.clone())
+                }
+                super::AuthType::Passthrough => {
+                    // Passthrough auth - token comes from request header
+                    // Use placeholder since actual token is provided at request time
+                    "passthrough".to_string()
                 }
             };
 
