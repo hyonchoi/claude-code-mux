@@ -476,11 +476,8 @@ async fn handle_openai_chat_completions(
     let model = openai_request.model.clone();
     info!("Received OpenAI-compatible request for model: {}", model);
 
-    let passthrough_token: Option<String> = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    // Extract and validate bearer token for passthrough mode
+    let passthrough_token = extract_bearer_token(&headers);
 
     if passthrough_token.is_some() {
         info!("🔑 Passthrough mode detected (caller-provided bearer token)");
@@ -652,12 +649,8 @@ async fn handle_messages(
         tracing::debug!("📥 Incoming request body:\n{}", json_str);
     }
 
-    // Extract caller-provided bearer token for passthrough mode
-    let passthrough_token: Option<String> = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    // Extract and validate bearer token for passthrough mode
+    let passthrough_token = extract_bearer_token(&headers);
 
     if passthrough_token.is_some() {
         info!("🔑 Passthrough mode detected (caller-provided bearer token)");
@@ -1015,6 +1008,53 @@ impl std::fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
+/// Extract and validate Bearer token from Authorization header
+/// 
+/// Validates:
+/// - Header exists and starts with "Bearer " (case-insensitive)
+/// - Token is non-empty after trimming
+/// - Token contains only valid characters (alphanumeric, dash, underscore, dot, tilde, plus, slash, equals)
+/// - Token length <= 8192 bytes
+/// 
+/// Returns None if header is missing or invalid.
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            // Case-insensitive Bearer prefix check
+            if s.len() < 7 {
+                return None;
+            }
+            if !s[..7].eq_ignore_ascii_case("Bearer ") {
+                return None;
+            }
+            
+            let token = s[7..].trim();
+            
+            // Reject empty tokens
+            if token.is_empty() {
+                return None;
+            }
+            
+            // Reject tokens exceeding max length (8KB)
+            if token.len() > 8192 {
+                return None;
+            }
+            
+            // Validate token contains only safe characters
+            // Bearer tokens can contain: alphanumeric, - _ . ~ + / =
+            // Reject any control characters or CRLF
+            if !token.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | '+' | '/' | '=')
+            }) {
+                return None;
+            }
+            
+            Some(token.to_string())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::providers::ProviderConfig;
@@ -1103,5 +1143,142 @@ mod tests {
             .collect();
 
         assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_extract_bearer_token_with_valid_token() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer valid-token-123".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token-123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_case_insensitive() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "bearer valid-token-456".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token-456".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_mixed_case() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "BeArEr valid-token-789".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token-789".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_missing_header() {
+        let headers = axum::http::HeaderMap::new();
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_empty_value() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer ".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_whitespace_only() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer    ".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_trims_whitespace() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer   valid-token   ".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_rejects_invalid_prefix() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic dXNlcjpwYXNz".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_with_special_chars() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert!(token.is_some());
+    }
+
+    // Note: Tests for control characters (newline, null byte, CRLF) are not included
+    // because axum::http::HeaderValue::parse() itself rejects these at the HTTP library level.
+    // Our validator adds defense-in-depth at the application level in case values bypass
+    // the HTTP parser (e.g., from direct function calls with unsanitized input).
+
+    #[test]
+    fn test_extract_bearer_token_rejects_excessive_length() {
+        let mut headers = axum::http::HeaderMap::new();
+        let long_token = "a".repeat(8193);
+        let auth_header = format!("Bearer {}", long_token);
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            auth_header.parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_accepts_max_length() {
+        let mut headers = axum::http::HeaderMap::new();
+        let long_token = "a".repeat(8192);
+        let auth_header = format!("Bearer {}", long_token);
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            auth_header.parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert!(token.is_some());
+    }
+
+    #[test]
+    fn test_extract_bearer_token_rejects_invalid_chars() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer token<script>alert(1)</script>".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
     }
 }

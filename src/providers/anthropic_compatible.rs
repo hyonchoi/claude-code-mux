@@ -70,6 +70,12 @@ impl AnthropicCompatibleProvider {
     /// Get authentication header value. override_auth takes highest priority.
     async fn get_auth_header(&self, override_auth: Option<&str>) -> Result<String, ProviderError> {
         if let Some(token) = override_auth {
+            // Validate passthrough token format (reject control characters)
+            if token.chars().any(|c| c.is_control()) {
+                return Err(ProviderError::AuthError(
+                    "Bearer token contains invalid characters".to_string()
+                ));
+            }
             return Ok(token.to_string());
         }
 
