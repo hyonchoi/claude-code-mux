@@ -8,6 +8,10 @@ repository = "https://github.com/9j/claude-code-mux"
 keywords = ["claude", "code", "router", "llm", "ai"]
 categories = ["command-line-utilities", "web-programming"]
 
+[lib]
+name = "claude_code_mux"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ccm"
 path = "src/main.rs"
