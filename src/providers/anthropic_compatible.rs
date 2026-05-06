@@ -512,8 +512,9 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         if self.name == "anthropic" {
             let url = format!("{}/v1/messages/count_tokens", self.base_url);
 
-            // Get authentication
-            let auth_value = self.get_auth_header(None).await?;
+            // Get authentication - use passthrough token if provided
+            let override_auth = request.passthrough_auth.as_deref();
+            let auth_value = self.get_auth_header(override_auth).await?;
 
             let mut req_builder = self.client
                 .post(&url)
@@ -521,7 +522,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                 .header("Content-Type", "application/json");
 
             // Set auth header
-            if self.is_oauth() {
+            if override_auth.is_some() || self.is_oauth() {
                 req_builder = req_builder
                     .header("Authorization", format!("Bearer {}", auth_value))
                     .header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");

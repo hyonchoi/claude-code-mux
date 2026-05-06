@@ -180,6 +180,8 @@ pub struct CountTokensRequest {
     pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passthrough_auth: Option<String>,
 }
 
 /// Response for token counting

@@ -1115,9 +1115,10 @@ async fn handle_count_tokens(
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Trust the model mapping configuration - no need to validate
 
-                // Update model to actual model name
+                // Update model to actual model name and include passthrough auth if present
                 let mut count_request_for_provider = count_request.clone();
                 count_request_for_provider.model = mapping.actual_model.clone();
+                count_request_for_provider.passthrough_auth = passthrough_token.clone();
 
                 // Call provider's count_tokens
                 match provider.count_tokens(count_request_for_provider).await {
@@ -1147,9 +1148,10 @@ async fn handle_count_tokens(
         if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
             info!("📦 Using provider from registry (direct lookup) for token counting: {}", decision.model_name);
 
-            // Update model to routed model
+            // Update model to routed model and include passthrough auth if present
             let mut count_request_for_provider = count_request.clone();
             count_request_for_provider.model = decision.model_name.clone();
+            count_request_for_provider.passthrough_auth = passthrough_token.clone();
 
             // Call provider's count_tokens
             let response = provider.count_tokens(count_request_for_provider)
