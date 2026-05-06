@@ -67,21 +67,19 @@ impl AnthropicCompatibleProvider {
         }
     }
 
-    /// Get authentication header value (API key or OAuth Bearer token)
-    async fn get_auth_header(&self) -> Result<String, ProviderError> {
-        // If OAuth provider is configured, use Bearer token
+    /// Get authentication header value. override_auth takes highest priority.
+    async fn get_auth_header(&self, override_auth: Option<&str>) -> Result<String, ProviderError> {
+        if let Some(token) = override_auth {
+            return Ok(token.to_string());
+        }
+
         if let Some(ref oauth_provider_id) = self.oauth_provider {
             if let Some(ref token_store) = self.token_store {
-                // Try to get token from store
                 if let Some(token) = token_store.get(oauth_provider_id) {
-                    // Check if token needs refresh
                     if token.needs_refresh() {
                         tracing::info!("🔄 Token for '{}' needs refresh, refreshing...", oauth_provider_id);
-
-                        // Refresh token
                         let config = OAuthConfig::anthropic();
                         let oauth_client = OAuthClient::new(config, token_store.clone());
-
                         match oauth_client.refresh_token(oauth_provider_id).await {
                             Ok(new_token) => {
                                 tracing::info!("✅ Token refreshed successfully");
@@ -95,7 +93,6 @@ impl AnthropicCompatibleProvider {
                             }
                         }
                     } else {
-                        // Token is still valid
                         return Ok(token.access_token);
                     }
                 } else {
@@ -111,7 +108,6 @@ impl AnthropicCompatibleProvider {
             }
         }
 
-        // Fall back to API key
         Ok(self.api_key.clone())
     }
 
@@ -203,7 +199,8 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         let url = format!("{}/v1/messages", self.base_url);
 
         // Get authentication header value (API key or OAuth token)
-        let auth_value = self.get_auth_header().await?;
+        let override_auth = request.passthrough_auth.as_deref();
+        let auth_value = self.get_auth_header(override_auth).await?;
 
         // Build request with authentication
         let mut req_builder = self.client
@@ -212,14 +209,12 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             .header("Content-Type", "application/json");
 
         // Set auth header based on OAuth vs API key
-        if self.is_oauth() {
-            // OAuth: Use Authorization Bearer token
+        if override_auth.is_some() || self.is_oauth() {
             req_builder = req_builder
                 .header("Authorization", format!("Bearer {}", auth_value))
                 .header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
             tracing::debug!("🔐 Using OAuth Bearer token for {}", self.name);
         } else {
-            // API Key: Use x-api-key
             req_builder = req_builder.header("x-api-key", auth_value);
         }
 
@@ -271,7 +266,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             let url = format!("{}/v1/messages/count_tokens", self.base_url);
 
             // Get authentication
-            let auth_value = self.get_auth_header().await?;
+            let auth_value = self.get_auth_header(None).await?;
 
             let mut req_builder = self.client
                 .post(&url)
@@ -359,7 +354,8 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         let url = format!("{}/v1/messages", self.base_url);
 
         // Get authentication header value
-        let auth_value = self.get_auth_header().await?;
+        let override_auth = request.passthrough_auth.as_deref();
+        let auth_value = self.get_auth_header(override_auth).await?;
 
         // Build request with authentication
         let mut req_builder = self.client
@@ -368,7 +364,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             .header("Content-Type", "application/json");
 
         // Set auth header based on OAuth vs API key
-        if self.is_oauth() {
+        if override_auth.is_some() || self.is_oauth() {
             req_builder = req_builder
                 .header("Authorization", format!("Bearer {}", auth_value))
                 .header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
@@ -411,5 +407,35 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
     fn supports_model(&self, model: &str) -> bool {
         self.models.iter().any(|m| m == model)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_provider() -> AnthropicCompatibleProvider {
+        AnthropicCompatibleProvider::new(
+            "test".to_string(),
+            "internal-api-key".to_string(),
+            "https://api.anthropic.com".to_string(),
+            vec![],
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_get_auth_header_uses_override_when_provided() {
+        let provider = make_provider();
+        let result = provider.get_auth_header(Some("caller-token")).await.unwrap();
+        assert_eq!(result, "caller-token");
+    }
+
+    #[tokio::test]
+    async fn test_get_auth_header_falls_back_to_api_key_when_no_override() {
+        let provider = make_provider();
+        let result = provider.get_auth_header(None).await.unwrap();
+        assert_eq!(result, "internal-api-key");
     }
 }
