@@ -30,6 +30,41 @@ pub struct AppState {
     pub config_path: std::path::PathBuf,
 }
 
+/// Strip beta options from an AnthropicRequest based on mapping configuration
+fn strip_beta_options_from_request(
+    request: &mut AnthropicRequest,
+    strip_all: bool,
+    strip_specific: &[String],
+) {
+    // If we should strip all beta options
+    if strip_all {
+        request.anthropic_beta_header = None;
+        info!("📝 Stripped all beta options from request");
+        return;
+    }
+
+    // If we have specific beta options to strip
+    if !strip_specific.is_empty() {
+        if let Some(ref beta_header) = request.anthropic_beta_header {
+            // Parse comma-separated beta options and filter out the ones to strip
+            let options: Vec<&str> = beta_header.split(',').map(|s| s.trim()).collect();
+            let filtered: Vec<&str> = options
+                .iter()
+                .filter(|opt| !strip_specific.contains(&opt.to_string()))
+                .copied()
+                .collect();
+
+            if filtered.is_empty() {
+                request.anthropic_beta_header = None;
+                info!("📝 Stripped all specified beta options; header is now empty");
+            } else if filtered.len() < options.len() {
+                request.anthropic_beta_header = Some(filtered.join(", "));
+                info!("📝 Stripped specific beta options: {:?}", strip_specific);
+            }
+        }
+    }
+}
+
 /// Start the HTTP server
 pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) -> anyhow::Result<()> {
     let router = Router::new(config.clone());
@@ -614,6 +649,9 @@ async fn handle_openai_chat_completions(
             }
         }
 
+        // Save original beta header to restore for each mapping attempt
+        let original_beta_header = anthropic_request.anthropic_beta_header.clone();
+
         // Try each mapping in priority order (or just the forced one)
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
@@ -628,6 +666,16 @@ async fn handle_openai_chat_completions(
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Update model to actual model name
                 anthropic_request.model = mapping.actual_model.clone();
+
+                // Restore original beta header before applying mapping-specific stripping
+                anthropic_request.anthropic_beta_header = original_beta_header.clone();
+
+                // Strip beta options if configured in the mapping
+                strip_beta_options_from_request(
+                    &mut anthropic_request,
+                    mapping.strip_beta_options,
+                    &mapping.strip_specific_beta,
+                );
 
                 // Check if streaming is requested
                 let is_streaming = anthropic_request.stream == Some(true);
@@ -812,6 +860,13 @@ async fn handle_messages(
 
                 // Update model to actual model name
                 anthropic_request.model = mapping.actual_model.clone();
+
+                // Strip beta options if configured in the mapping
+                strip_beta_options_from_request(
+                    &mut anthropic_request,
+                    mapping.strip_beta_options,
+                    &mapping.strip_specific_beta,
+                );
 
                 // Update system if modified during routing
                 anthropic_request.system = request_for_routing.system.clone();
@@ -1188,8 +1243,20 @@ mod tests {
         let configs = make_configs(); // ant1=anthropic, oai1=openai
 
         let mappings = vec![
-            ModelMapping { provider: "ant1".to_string(), actual_model: "claude-opus-4-5".to_string(), priority: 1 },
-            ModelMapping { provider: "oai1".to_string(), actual_model: "gpt-4o".to_string(), priority: 2 },
+            ModelMapping {
+                provider: "ant1".to_string(),
+                actual_model: "claude-opus-4-5".to_string(),
+                priority: 1,
+                strip_beta_options: false,
+                strip_specific_beta: vec![],
+            },
+            ModelMapping {
+                provider: "oai1".to_string(),
+                actual_model: "gpt-4o".to_string(),
+                priority: 2,
+                strip_beta_options: false,
+                strip_specific_beta: vec![],
+            },
         ];
 
         let filtered: Vec<_> = mappings
@@ -1208,7 +1275,13 @@ mod tests {
         let configs = make_configs(); // ant1=anthropic, oai1=openai
 
         let mappings = vec![
-            ModelMapping { provider: "oai1".to_string(), actual_model: "gpt-4o".to_string(), priority: 1 },
+            ModelMapping {
+                provider: "oai1".to_string(),
+                actual_model: "gpt-4o".to_string(),
+                priority: 1,
+                strip_beta_options: false,
+                strip_specific_beta: vec![],
+            },
         ];
 
         let filtered: Vec<_> = mappings
