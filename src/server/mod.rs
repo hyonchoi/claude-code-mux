@@ -1094,6 +1094,7 @@ pub enum AppError {
     RoutingError(String),
     ParseError(String),
     ProviderError(String),
+    AuthError(String),
 }
 
 impl IntoResponse for AppError {
@@ -1102,6 +1103,7 @@ impl IntoResponse for AppError {
             AppError::RoutingError(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::ParseError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AppError::ProviderError(msg) => (StatusCode::BAD_GATEWAY, msg),
+            AppError::AuthError(msg) => (StatusCode::UNAUTHORIZED, msg),
         };
 
         let body = Json(serde_json::json!({
@@ -1121,6 +1123,7 @@ impl std::fmt::Display for AppError {
             AppError::RoutingError(msg) => write!(f, "Routing error: {}", msg),
             AppError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             AppError::ProviderError(msg) => write!(f, "Provider error: {}", msg),
+            AppError::AuthError(msg) => write!(f, "Auth error: {}", msg),
         }
     }
 }
