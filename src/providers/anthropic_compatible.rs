@@ -1,17 +1,19 @@
-use super::{AnthropicProvider, ProviderResponse, error::ProviderError, AuthType};
+use super::{error::ProviderError, AnthropicProvider, AuthType, ProviderResponse};
+use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
 use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse};
-use crate::auth::{TokenStore, OAuthClient, OAuthConfig};
 use crate::server::{parse_anthropic_beta, validate_anthropic_beta};
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures::stream::Stream;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use reqwest::Client;
+use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::num::NonZeroU32;
-use futures::stream::Stream;
-use bytes::Bytes;
-use tokio::time::{Duration, Instant, timeout};
+use tokio::time::{timeout, Duration, Instant};
 use tracing::{debug, warn};
+
+pub(crate) const DEFAULT_RATE_LIMIT_MAX_WAIT_MS: u64 = 2_000;
 
 /// Generic Anthropic-compatible provider
 /// Works with: Anthropic, OpenRouter, z.ai, Minimax, NVIDIA NIM, etc.
@@ -221,10 +223,11 @@ impl AnthropicCompatibleProvider {
         rate_limit_max_wait_ms: Option<u64>,
     ) -> Self {
         self.rate_limit_rpm = rate_limit_rpm;
-        self.rate_limit_max_wait_ms = match rate_limit_rpm {
-            Some(_) => Some(rate_limit_max_wait_ms.unwrap_or(2_000)),
-            None => None,
-        };
+        self.rate_limit_max_wait_ms = rate_limit_rpm.map(|_| {
+            rate_limit_max_wait_ms
+                .filter(|max_wait_ms| *max_wait_ms > 0)
+                .unwrap_or(DEFAULT_RATE_LIMIT_MAX_WAIT_MS)
+        });
         self.rate_limiter = rate_limit_rpm
             .and_then(NonZeroU32::new)
             .map(|rpm| Arc::new(RateLimiter::direct(Quota::per_minute(rpm))));
@@ -243,7 +246,9 @@ impl AnthropicCompatibleProvider {
             )));
         }
 
-        let max_wait_ms = self.rate_limit_max_wait_ms.unwrap_or(2_000);
+        let max_wait_ms = self
+            .rate_limit_max_wait_ms
+            .unwrap_or(DEFAULT_RATE_LIMIT_MAX_WAIT_MS);
         let limiter = self.rate_limiter.as_ref().ok_or_else(|| {
             ProviderError::ConfigError(format!(
                 "Provider '{}' rate limiter not initialized",
@@ -289,7 +294,7 @@ impl AnthropicCompatibleProvider {
             // Validate passthrough token format (reject control characters)
             if token.chars().any(|c| c.is_control()) {
                 return Err(ProviderError::AuthError(
-                    "Bearer token contains invalid characters".to_string()
+                    "Bearer token contains invalid characters".to_string(),
                 ));
             }
             return Ok(token.to_string());
@@ -298,7 +303,7 @@ impl AnthropicCompatibleProvider {
         // Check if provider is configured for passthrough auth
         if self.auth_type == AuthType::Passthrough {
             return Err(ProviderError::AuthError(
-                "Passthrough auth requires token from request headers".to_string()
+                "Passthrough auth requires token from request headers".to_string(),
             ));
         }
 
@@ -306,7 +311,10 @@ impl AnthropicCompatibleProvider {
             if let Some(ref token_store) = self.token_store {
                 if let Some(token) = token_store.get(oauth_provider_id) {
                     if token.needs_refresh() {
-                        tracing::info!("🔄 Token for '{}' needs refresh, refreshing...", oauth_provider_id);
+                        tracing::info!(
+                            "🔄 Token for '{}' needs refresh, refreshing...",
+                            oauth_provider_id
+                        );
                         let config = OAuthConfig::anthropic();
                         let oauth_client = OAuthClient::new(config, token_store.clone());
                         match oauth_client.refresh_token(oauth_provider_id).await {
@@ -317,7 +325,8 @@ impl AnthropicCompatibleProvider {
                             Err(e) => {
                                 tracing::error!("❌ Failed to refresh token: {}", e);
                                 return Err(ProviderError::AuthError(format!(
-                                    "Failed to refresh OAuth token: {}", e
+                                    "Failed to refresh OAuth token: {}",
+                                    e
                                 )));
                             }
                         }
@@ -332,7 +341,7 @@ impl AnthropicCompatibleProvider {
                 }
             } else {
                 return Err(ProviderError::AuthError(
-                    "OAuth provider configured but TokenStore not available".to_string()
+                    "OAuth provider configured but TokenStore not available".to_string(),
                 ));
             }
         }
@@ -377,7 +386,10 @@ impl AnthropicCompatibleProvider {
             "https://openrouter.ai/api".to_string(),
             models,
             vec![
-                ("HTTP-Referer".to_string(), "https://github.com/bahkchanhee/claude-code-mux".to_string()),
+                (
+                    "HTTP-Referer".to_string(),
+                    "https://github.com/bahkchanhee/claude-code-mux".to_string(),
+                ),
                 ("X-Title".to_string(), "Claude Code Mux".to_string()),
             ],
             auth_type,
@@ -389,16 +401,16 @@ impl AnthropicCompatibleProvider {
 
     /// Create z.ai provider (Anthropic-compatible)
     pub fn zai(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::zai_with_auth(
-            api_key,
-            models,
-            AuthType::ApiKey,
-            token_store,
-        )
+        Self::zai_with_auth(api_key, models, AuthType::ApiKey, token_store)
     }
 
     /// Create z.ai provider with auth type
-    pub fn zai_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+    pub fn zai_with_auth(
+        api_key: String,
+        models: Vec<String>,
+        auth_type: AuthType,
+        token_store: Option<TokenStore>,
+    ) -> Self {
         Self::new_with_options_and_auth(
             "z.ai".to_string(),
             api_key,
@@ -413,16 +425,16 @@ impl AnthropicCompatibleProvider {
 
     /// Create Minimax provider (Anthropic-compatible)
     pub fn minimax(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::minimax_with_auth(
-            api_key,
-            models,
-            AuthType::ApiKey,
-            token_store,
-        )
+        Self::minimax_with_auth(api_key, models, AuthType::ApiKey, token_store)
     }
 
     /// Create Minimax provider with auth type
-    pub fn minimax_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+    pub fn minimax_with_auth(
+        api_key: String,
+        models: Vec<String>,
+        auth_type: AuthType,
+        token_store: Option<TokenStore>,
+    ) -> Self {
         Self::new_with_options_and_auth(
             "minimax".to_string(),
             api_key,
@@ -437,16 +449,16 @@ impl AnthropicCompatibleProvider {
 
     /// Create ZenMux provider (Anthropic-compatible proxy)
     pub fn zenmux(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::zenmux_with_auth(
-            api_key,
-            models,
-            AuthType::ApiKey,
-            token_store,
-        )
+        Self::zenmux_with_auth(api_key, models, AuthType::ApiKey, token_store)
     }
 
     /// Create ZenMux provider with auth type
-    pub fn zenmux_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+    pub fn zenmux_with_auth(
+        api_key: String,
+        models: Vec<String>,
+        auth_type: AuthType,
+        token_store: Option<TokenStore>,
+    ) -> Self {
         Self::new_with_options_and_auth(
             "zenmux".to_string(),
             api_key,
@@ -460,17 +472,21 @@ impl AnthropicCompatibleProvider {
     }
 
     /// Create Kimi For Coding provider (Anthropic-compatible)
-    pub fn kimi_coding(api_key: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
-        Self::kimi_coding_with_auth(
-            api_key,
-            models,
-            AuthType::ApiKey,
-            token_store,
-        )
+    pub fn kimi_coding(
+        api_key: String,
+        models: Vec<String>,
+        token_store: Option<TokenStore>,
+    ) -> Self {
+        Self::kimi_coding_with_auth(api_key, models, AuthType::ApiKey, token_store)
     }
 
     /// Create Kimi For Coding provider with auth type
-    pub fn kimi_coding_with_auth(api_key: String, models: Vec<String>, auth_type: AuthType, token_store: Option<TokenStore>) -> Self {
+    pub fn kimi_coding_with_auth(
+        api_key: String,
+        models: Vec<String>,
+        auth_type: AuthType,
+        token_store: Option<TokenStore>,
+    ) -> Self {
         Self::new_with_options_and_auth(
             "kimi-coding".to_string(),
             api_key,
@@ -486,7 +502,10 @@ impl AnthropicCompatibleProvider {
 
 #[async_trait]
 impl AnthropicProvider for AnthropicCompatibleProvider {
-    async fn send_message(&self, request: AnthropicRequest) -> Result<ProviderResponse, ProviderError> {
+    async fn send_message(
+        &self,
+        request: AnthropicRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
         self.await_rate_limit_permit().await?;
 
         let url = format!("{}/v1/messages", self.base_url);
@@ -496,15 +515,15 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         let auth_value = self.get_auth_header(override_auth).await?;
 
         // Build request with authentication
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(&url)
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json");
 
         // Set auth header based on OAuth vs API key
         if override_auth.is_some() || self.is_oauth() {
-            req_builder = req_builder
-                .header("Authorization", format!("Bearer {}", auth_value));
+            req_builder = req_builder.header("Authorization", format!("Bearer {}", auth_value));
             tracing::debug!("🔐 Using OAuth Bearer token for {}", self.name);
         } else {
             req_builder = req_builder.header("x-api-key", auth_value);
@@ -512,19 +531,30 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
-            debug!("{}: custom beta options provided, parsing and validating: '{}'", self.name, beta_header);
-            
+            debug!(
+                "{}: custom beta options provided, parsing and validating: '{}'",
+                self.name, beta_header
+            );
+
             // Parse the beta header (CSV format → individual options)
             match parse_anthropic_beta(beta_header) {
                 Ok(parsed_options) => {
-                    debug!("{}: parse_anthropic_beta succeeded, got {} options", self.name, parsed_options.len());
-                    
+                    debug!(
+                        "{}: parse_anthropic_beta succeeded, got {} options",
+                        self.name,
+                        parsed_options.len()
+                    );
+
                     // Validate options if provider has a supported list
                     if !self.supported_beta_options.is_empty() {
                         debug!("{}: provider has {} supported beta options, validating against model '{}'", 
                                self.name, self.supported_beta_options.len(), request.model);
-                        
-                        match validate_anthropic_beta(&parsed_options, &self.supported_beta_options, &request.model) {
+
+                        match validate_anthropic_beta(
+                            &parsed_options,
+                            &self.supported_beta_options,
+                            &request.model,
+                        ) {
                             Ok(()) => {
                                 debug!("{}: beta options VALIDATED successfully for model '{}', applying header", 
                                        self.name, request.model);
@@ -535,7 +565,10 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                                       self.name, request.model, validation_error);
                                 // Fall back to defaults on validation failure
                                 let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                                debug!("{}: applying default beta header: '{}'", self.name, default_beta);
+                                debug!(
+                                    "{}: applying default beta header: '{}'",
+                                    self.name, default_beta
+                                );
                                 req_builder = req_builder.header("anthropic-beta", default_beta);
                             }
                         }
@@ -546,16 +579,25 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                     }
                 }
                 Err(parse_error) => {
-                    warn!("{}: parse_anthropic_beta FAILED: {}. Falling back to defaults", self.name, parse_error);
+                    warn!(
+                        "{}: parse_anthropic_beta FAILED: {}. Falling back to defaults",
+                        self.name, parse_error
+                    );
                     // Fall back to defaults on parse failure
                     let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                    debug!("{}: applying default beta header: '{}'", self.name, default_beta);
+                    debug!(
+                        "{}: applying default beta header: '{}'",
+                        self.name, default_beta
+                    );
                     req_builder = req_builder.header("anthropic-beta", default_beta);
                 }
             }
         } else {
             let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-            debug!("{}: no anthropic-beta header in request, using defaults: '{}'", self.name, default_beta);
+            debug!(
+                "{}: no anthropic-beta header in request, using defaults: '{}'",
+                self.name, default_beta
+            );
             req_builder = req_builder.header("anthropic-beta", default_beta);
         }
 
@@ -565,15 +607,15 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         }
 
         // Send request (pass-through, no transformation needed!)
-        let response = req_builder
-            .json(&request)
-            .send()
-            .await?;
+        let response = req_builder.json(&request).send().await?;
 
         // Check for errors
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
 
             // If 401 and using OAuth, token might be invalid/expired
             if status == 401 && self.is_oauth() {
@@ -591,8 +633,8 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         tracing::debug!("{} provider response body: {}", self.name, response_text);
 
         // Try to parse the response (already in Anthropic format!)
-        let provider_response: ProviderResponse = serde_json::from_str(&response_text)
-            .map_err(|e| {
+        let provider_response: ProviderResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
                 tracing::error!("Failed to parse {} response: {}", self.name, e);
                 tracing::error!("Response body was: {}", response_text);
                 e
@@ -601,7 +643,10 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         Ok(provider_response)
     }
 
-    async fn count_tokens(&self, request: CountTokensRequest) -> Result<CountTokensResponse, ProviderError> {
+    async fn count_tokens(
+        &self,
+        request: CountTokensRequest,
+    ) -> Result<CountTokensResponse, ProviderError> {
         // For Anthropic native, use their count_tokens endpoint
         if self.name == "anthropic" {
             let url = format!("{}/v1/messages/count_tokens", self.base_url);
@@ -610,7 +655,8 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             let override_auth = request.passthrough_auth.as_deref();
             let auth_value = self.get_auth_header(override_auth).await?;
 
-            let mut req_builder = self.client
+            let mut req_builder = self
+                .client
                 .post(&url)
                 .header("anthropic-version", "2023-06-01")
                 .header("Content-Type", "application/json");
@@ -624,14 +670,14 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                 req_builder = req_builder.header("x-api-key", auth_value);
             }
 
-            let response = req_builder
-                .json(&request)
-                .send()
-                .await?;
+            let response = req_builder.json(&request).send().await?;
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
                 return Err(ProviderError::ApiError {
                     status,
                     message: error_text,
@@ -648,9 +694,11 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         if let Some(ref system) = request.system {
             let system_text = match system {
                 crate::models::SystemPrompt::Text(text) => text.clone(),
-                crate::models::SystemPrompt::Blocks(blocks) => {
-                    blocks.iter().map(|b| b.text.clone()).collect::<Vec<_>>().join("\n")
-                }
+                crate::models::SystemPrompt::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| b.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             };
             total_chars += system_text.len();
         }
@@ -659,23 +707,20 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             use crate::models::MessageContent;
             let content = match &msg.content {
                 MessageContent::Text(text) => text.clone(),
-                MessageContent::Blocks(blocks) => {
-                    blocks.iter()
-                        .filter_map(|block| {
-                            match block {
-                                crate::models::ContentBlock::Text { text } => Some(text.clone()),
-                                crate::models::ContentBlock::ToolResult { content, .. } => {
-                                    Some(content.to_string())
-                                }
-                                crate::models::ContentBlock::Thinking { thinking, .. } => {
-                                    Some(thinking.clone())
-                                }
-                                _ => None,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        crate::models::ContentBlock::Text { text } => Some(text.clone()),
+                        crate::models::ContentBlock::ToolResult { content, .. } => {
+                            Some(content.to_string())
+                        }
+                        crate::models::ContentBlock::Thinking { thinking, .. } => {
+                            Some(thinking.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             };
             total_chars += content.len();
         }
@@ -690,7 +735,8 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
     async fn send_message_stream(
         &self,
         request: AnthropicRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
+    {
         use futures::stream::TryStreamExt;
 
         self.await_rate_limit_permit().await?;
@@ -702,15 +748,15 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         let auth_value = self.get_auth_header(override_auth).await?;
 
         // Build request with authentication
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(&url)
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json");
 
         // Set auth header based on OAuth vs API key
         if override_auth.is_some() || self.is_oauth() {
-            req_builder = req_builder
-                .header("Authorization", format!("Bearer {}", auth_value));
+            req_builder = req_builder.header("Authorization", format!("Bearer {}", auth_value));
             tracing::debug!("🔐 Using OAuth Bearer token for streaming on {}", self.name);
         } else {
             req_builder = req_builder.header("x-api-key", auth_value);
@@ -718,19 +764,30 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
         // Add anthropic-beta header if provided
         if let Some(beta_header) = &request.anthropic_beta_header {
-            debug!("{} [stream]: custom beta options provided, parsing and validating: '{}'", self.name, beta_header);
-            
+            debug!(
+                "{} [stream]: custom beta options provided, parsing and validating: '{}'",
+                self.name, beta_header
+            );
+
             // Parse the beta header (CSV format → individual options)
             match parse_anthropic_beta(beta_header) {
                 Ok(parsed_options) => {
-                    debug!("{} [stream]: parse_anthropic_beta succeeded, got {} options", self.name, parsed_options.len());
-                    
+                    debug!(
+                        "{} [stream]: parse_anthropic_beta succeeded, got {} options",
+                        self.name,
+                        parsed_options.len()
+                    );
+
                     // Validate options if provider has a supported list
                     if !self.supported_beta_options.is_empty() {
                         debug!("{} [stream]: provider has {} supported beta options, validating against model '{}'", 
                                self.name, self.supported_beta_options.len(), request.model);
-                        
-                        match validate_anthropic_beta(&parsed_options, &self.supported_beta_options, &request.model) {
+
+                        match validate_anthropic_beta(
+                            &parsed_options,
+                            &self.supported_beta_options,
+                            &request.model,
+                        ) {
                             Ok(()) => {
                                 debug!("{} [stream]: beta options VALIDATED successfully for model '{}', applying header", 
                                        self.name, request.model);
@@ -741,7 +798,10 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                                       self.name, request.model, validation_error);
                                 // Fall back to defaults on validation failure
                                 let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                                debug!("{} [stream]: applying default beta header: '{}'", self.name, default_beta);
+                                debug!(
+                                    "{} [stream]: applying default beta header: '{}'",
+                                    self.name, default_beta
+                                );
                                 req_builder = req_builder.header("anthropic-beta", default_beta);
                             }
                         }
@@ -752,16 +812,25 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                     }
                 }
                 Err(parse_error) => {
-                    warn!("{} [stream]: parse_anthropic_beta FAILED: {}. Falling back to defaults", self.name, parse_error);
+                    warn!(
+                        "{} [stream]: parse_anthropic_beta FAILED: {}. Falling back to defaults",
+                        self.name, parse_error
+                    );
                     // Fall back to defaults on parse failure
                     let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-                    debug!("{} [stream]: applying default beta header: '{}'", self.name, default_beta);
+                    debug!(
+                        "{} [stream]: applying default beta header: '{}'",
+                        self.name, default_beta
+                    );
                     req_builder = req_builder.header("anthropic-beta", default_beta);
                 }
             }
         } else {
             let default_beta = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
-            debug!("{} [stream]: no anthropic-beta header in request, using defaults: '{}'", self.name, default_beta);
+            debug!(
+                "{} [stream]: no anthropic-beta header in request, using defaults: '{}'",
+                self.name, default_beta
+            );
             req_builder = req_builder.header("anthropic-beta", default_beta);
         }
 
@@ -771,18 +840,20 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         }
 
         // Send request with stream=true
-        let response = req_builder
-            .json(&request)
-            .send()
-            .await?;
+        let response = req_builder.json(&request).send().await?;
 
         // Check for errors
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
 
             if status == 401 && self.is_oauth() {
-                tracing::warn!("🔄 Received 401 on streaming, OAuth token may be invalid or expired");
+                tracing::warn!(
+                    "🔄 Received 401 on streaming, OAuth token may be invalid or expired"
+                );
             }
 
             return Err(ProviderError::ApiError {
@@ -792,7 +863,9 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         }
 
         // Return the byte stream directly
-        let stream = response.bytes_stream().map_err(|e| ProviderError::HttpError(e));
+        let stream = response
+            .bytes_stream()
+            .map_err(|e| ProviderError::HttpError(e));
 
         Ok(Box::pin(stream))
     }
@@ -823,7 +896,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_auth_header_uses_override_when_provided() {
         let provider = make_provider();
-        let result = provider.get_auth_header(Some("caller-token")).await.unwrap();
+        let result = provider
+            .get_auth_header(Some("caller-token"))
+            .await
+            .unwrap();
         assert_eq!(result, "caller-token");
     }
 
@@ -843,11 +919,15 @@ mod tests {
             vec!["meta-llama-3.1-405b-instruct".to_string()],
             None,
             None,
-        ).with_rate_limit(Some(40));
-        
+        )
+        .with_rate_limit(Some(40));
+
         // Verify provider is created with rate limit
         assert_eq!(provider.rate_limit_rpm, Some(40));
-        assert_eq!(provider.rate_limit_max_wait_ms, Some(2_000));
+        assert_eq!(
+            provider.rate_limit_max_wait_ms,
+            Some(DEFAULT_RATE_LIMIT_MAX_WAIT_MS)
+        );
     }
 
     #[test]
@@ -860,7 +940,7 @@ mod tests {
             None,
             None,
         );
-        
+
         // Verify providers without rate limit have None
         assert_eq!(provider.rate_limit_rpm, None);
     }
@@ -876,10 +956,31 @@ mod tests {
             None,
         );
         assert_eq!(provider.rate_limit_rpm, None);
-        
+
         let provider_with_limit = provider.with_rate_limit(Some(50));
         assert_eq!(provider_with_limit.rate_limit_rpm, Some(50));
-        assert_eq!(provider_with_limit.rate_limit_max_wait_ms, Some(2_000));
+        assert_eq!(
+            provider_with_limit.rate_limit_max_wait_ms,
+            Some(DEFAULT_RATE_LIMIT_MAX_WAIT_MS)
+        );
+    }
+
+    #[test]
+    fn test_zero_max_wait_uses_default() {
+        let provider = AnthropicCompatibleProvider::new(
+            "nvidia-nim".to_string(),
+            "key".to_string(),
+            "https://example.com".to_string(),
+            vec![],
+            None,
+            None,
+        )
+        .with_rate_limit_config(Some(10), Some(0));
+
+        assert_eq!(
+            provider.rate_limit_max_wait_ms,
+            Some(DEFAULT_RATE_LIMIT_MAX_WAIT_MS)
+        );
     }
 
     #[tokio::test]
@@ -898,7 +999,11 @@ mod tests {
         let err = provider.await_rate_limit_permit().await.unwrap_err();
 
         match err {
-            ProviderError::RateLimitTimeout { provider, rpm, max_wait_ms } => {
+            ProviderError::RateLimitTimeout {
+                provider,
+                rpm,
+                max_wait_ms,
+            } => {
                 assert_eq!(provider, "nvidia-nim");
                 assert_eq!(rpm, 1);
                 assert_eq!(max_wait_ms, 1);
@@ -935,5 +1040,46 @@ mod tests {
 
         let response = provider.count_tokens(request).await.unwrap();
         assert!(response.input_tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn test_stream_rate_limiter_timeout_returns_fallback_error() {
+        let provider = AnthropicCompatibleProvider::new(
+            "nvidia-nim".to_string(),
+            "key".to_string(),
+            "https://example.com".to_string(),
+            vec![],
+            None,
+            None,
+        )
+        .with_rate_limit_config(Some(1), Some(1));
+
+        provider.await_rate_limit_permit().await.unwrap();
+
+        let request = AnthropicRequest {
+            model: "meta-llama-3.1-8b-instruct".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: Some(true),
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let result = provider.send_message_stream(request).await;
+        assert!(matches!(
+            result,
+            Err(ProviderError::RateLimitTimeout { .. })
+        ));
     }
 }

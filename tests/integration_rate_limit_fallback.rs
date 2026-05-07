@@ -1,6 +1,6 @@
 use claude_code_mux::models::{AnthropicRequest, Message, MessageContent};
-use claude_code_mux::providers::{AnthropicCompatibleProvider, AnthropicProvider};
 use claude_code_mux::providers::error::ProviderError;
+use claude_code_mux::providers::{AnthropicCompatibleProvider, AnthropicProvider};
 use mockito::Server;
 use serde_json::json;
 
@@ -41,7 +41,7 @@ fn make_success_body(model: &str) -> String {
 }
 
 #[tokio::test]
-async fn test_wait_timeout_can_fallback_to_next_provider() {
+async fn test_wait_timeout_allows_manual_next_provider_attempt() {
     let mut primary_server = Server::new_async().await;
     let mut fallback_server = Server::new_async().await;
 

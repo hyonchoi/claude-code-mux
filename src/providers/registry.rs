@@ -1,5 +1,8 @@
-use super::{AnthropicProvider, ProviderConfig, OpenAIProvider, AnthropicCompatibleProvider, error::ProviderError};
 use super::gemini::GeminiProvider;
+use super::{
+    error::ProviderError, AnthropicCompatibleProvider, AnthropicProvider, OpenAIProvider,
+    ProviderConfig,
+};
 use crate::auth::TokenStore;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,10 +25,18 @@ impl ProviderRegistry {
     }
 
     /// Load providers from configuration
-    pub fn from_configs(configs: &[ProviderConfig], token_store: Option<TokenStore>) -> Result<Self, ProviderError> {
+    pub fn from_configs(
+        configs: &[ProviderConfig],
+        token_store: Option<TokenStore>,
+    ) -> Result<Self, ProviderError> {
         let mut registry = Self::new();
 
         for config in configs {
+            // Skip disabled providers
+            if !config.is_enabled() {
+                continue;
+            }
+
             if config.rate_limit_rpm == Some(0) {
                 return Err(ProviderError::ConfigError(format!(
                     "Provider '{}' has invalid rate_limit_rpm=0 (use null to disable or a value > 0)",
@@ -33,24 +44,28 @@ impl ProviderRegistry {
                 )));
             }
 
-            // Skip disabled providers
-            if !config.is_enabled() {
-                continue;
+            if config.rate_limit_rpm.is_some() && config.rate_limit_max_wait_ms == Some(0) {
+                return Err(ProviderError::ConfigError(format!(
+                    "Provider '{}' has invalid rate_limit_max_wait_ms=0 (use null for default or a value > 0)",
+                    config.name
+                )));
             }
 
             // Get API key - required for API key auth, skipped for OAuth and Passthrough
             let api_key = match &config.auth_type {
-                super::AuthType::ApiKey => {
-                    config.api_key.clone().ok_or_else(|| {
-                        ProviderError::ConfigError(
-                            format!("Provider '{}' requires api_key for ApiKey auth", config.name)
-                        )
-                    })?
-                }
+                super::AuthType::ApiKey => config.api_key.clone().ok_or_else(|| {
+                    ProviderError::ConfigError(format!(
+                        "Provider '{}' requires api_key for ApiKey auth",
+                        config.name
+                    ))
+                })?,
                 super::AuthType::OAuth => {
                     // OAuth providers will handle authentication differently
                     // For now, use a placeholder - will be replaced with token
-                    config.oauth_provider.clone().unwrap_or_else(|| config.name.clone())
+                    config
+                        .oauth_provider
+                        .clone()
+                        .unwrap_or_else(|| config.name.clone())
                 }
                 super::AuthType::Passthrough => {
                     // Passthrough auth - token comes from request header
@@ -65,47 +80,68 @@ impl ProviderRegistry {
                 "openai" => Box::new(OpenAIProvider::new(
                     config.name.clone(),
                     api_key,
-                    config.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+                    config
+                        .base_url
+                        .clone()
+                        .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
                     config.models.clone(),
                     config.oauth_provider.clone(),
                     token_store.clone(),
                 )),
 
                 // Anthropic-compatible providers
-                "anthropic" => Box::new(AnthropicCompatibleProvider::new_with_options_and_auth(
-                    config.name.clone(),
-                    api_key,
-                    config.base_url.clone().unwrap_or_else(|| "https://api.anthropic.com".to_string()),
-                    config.models.clone(),
-                    config.auth_type.clone(),
-                    config.oauth_provider.clone(),
-                    token_store.clone(),
-                    config.supported_beta_options.clone(),
-                ).with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms)),
-                "z.ai" => Box::new(AnthropicCompatibleProvider::zai_with_auth(
-                    api_key,
-                    config.models.clone(),
-                    config.auth_type.clone(),
-                    token_store.clone(),
-                )),
-                "minimax" => Box::new(AnthropicCompatibleProvider::minimax_with_auth(
-                    api_key,
-                    config.models.clone(),
-                    config.auth_type.clone(),
-                    token_store.clone(),
-                )),
-                "zenmux" => Box::new(AnthropicCompatibleProvider::zenmux_with_auth(
-                    api_key,
-                    config.models.clone(),
-                    config.auth_type.clone(),
-                    token_store.clone(),
-                )),
-                "kimi-coding" => Box::new(AnthropicCompatibleProvider::kimi_coding_with_auth(
-                    api_key,
-                    config.models.clone(),
-                    config.auth_type.clone(),
-                    token_store.clone(),
-                )),
+                "anthropic" => Box::new(
+                    AnthropicCompatibleProvider::new_with_options_and_auth(
+                        config.name.clone(),
+                        api_key,
+                        config
+                            .base_url
+                            .clone()
+                            .unwrap_or_else(|| "https://api.anthropic.com".to_string()),
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        config.oauth_provider.clone(),
+                        token_store.clone(),
+                        config.supported_beta_options.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+                "z.ai" => Box::new(
+                    AnthropicCompatibleProvider::zai_with_auth(
+                        api_key,
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        token_store.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+                "minimax" => Box::new(
+                    AnthropicCompatibleProvider::minimax_with_auth(
+                        api_key,
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        token_store.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+                "zenmux" => Box::new(
+                    AnthropicCompatibleProvider::zenmux_with_auth(
+                        api_key,
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        token_store.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+                "kimi-coding" => Box::new(
+                    AnthropicCompatibleProvider::kimi_coding_with_auth(
+                        api_key,
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        token_store.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
 
                 // OpenAI-compatible providers
                 "openrouter" => Box::new(OpenAIProvider::openrouter(
@@ -189,7 +225,7 @@ impl ProviderRegistry {
                         config.base_url.clone(),
                         config.models.clone(),
                         HashMap::new(), // custom headers
-                        None, // No OAuth for Vertex AI
+                        None,           // No OAuth for Vertex AI
                         token_store.clone(),
                         config.project_id.clone(), // GCP project ID
                         config.location.clone(),   // GCP location
@@ -197,9 +233,10 @@ impl ProviderRegistry {
                 }
 
                 other => {
-                    return Err(ProviderError::ConfigError(
-                        format!("Unknown provider type: {}", other)
-                    ));
+                    return Err(ProviderError::ConfigError(format!(
+                        "Unknown provider type: {}",
+                        other
+                    )));
                 }
             };
 
@@ -210,7 +247,7 @@ impl ProviderRegistry {
             // Add provider to registry with debug logging
             let provider_name = config.name.clone();
             let beta_options = &config.supported_beta_options;
-            
+
             if !beta_options.is_empty() {
                 tracing::debug!(
                     "registering provider '{}': supported beta options: {:?}",
@@ -218,9 +255,12 @@ impl ProviderRegistry {
                     beta_options
                 );
             } else {
-                tracing::debug!("registering provider '{}': no specific beta options configured", provider_name);
+                tracing::debug!(
+                    "registering provider '{}': no specific beta options configured",
+                    provider_name
+                );
             }
-            
+
             registry.providers.insert(provider_name, Arc::new(provider));
         }
 
@@ -233,7 +273,10 @@ impl ProviderRegistry {
     }
 
     /// Get a provider for a specific model
-    pub fn get_provider_for_model(&self, model: &str) -> Result<Arc<Box<dyn AnthropicProvider>>, ProviderError> {
+    pub fn get_provider_for_model(
+        &self,
+        model: &str,
+    ) -> Result<Arc<Box<dyn AnthropicProvider>>, ProviderError> {
         // First, check if we have a direct model → provider mapping
         if let Some(provider_name) = self.model_to_provider.get(model) {
             if let Some(provider) = self.providers.get(provider_name) {
@@ -303,12 +346,15 @@ mod tests {
             rate_limit_rpm: Some(40),
             rate_limit_max_wait_ms: Some(2000),
         };
-        
+
         // Verify provider configuration has rate limit set
         assert_eq!(config.name, "nvidia-nim");
         assert_eq!(config.provider_type, "anthropic");
         assert_eq!(config.rate_limit_rpm, Some(40));
-        assert_eq!(config.base_url, Some("https://integrate.api.nvidia.com/v1".to_string()));
+        assert_eq!(
+            config.base_url,
+            Some("https://integrate.api.nvidia.com/v1".to_string())
+        );
     }
 
     #[test]
@@ -328,10 +374,10 @@ mod tests {
             rate_limit_rpm: Some(40),
             rate_limit_max_wait_ms: Some(2000),
         };
-        
+
         let registry = ProviderRegistry::from_configs(&[config], None);
         assert!(registry.is_ok());
-        
+
         let registry = registry.unwrap();
         let provider = registry.get_provider("nvidia-nim");
         assert!(provider.is_some());
@@ -354,10 +400,10 @@ mod tests {
             rate_limit_rpm: None,
             rate_limit_max_wait_ms: None,
         };
-        
+
         // Verify providers without rate_limit_rpm work fine
         assert_eq!(config.rate_limit_rpm, None);
-        
+
         let registry = ProviderRegistry::from_configs(&[config], None);
         assert!(registry.is_ok());
     }
@@ -389,5 +435,56 @@ mod tests {
             }
             other => panic!("expected config error, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_rate_limit_max_wait_zero_is_rejected() {
+        let config = ProviderConfig {
+            name: "nvidia-nim".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            models: vec!["meta-llama-3.1-405b-instruct".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(1),
+            rate_limit_max_wait_ms: Some(0),
+        };
+
+        let err = ProviderRegistry::from_configs(&[config], None)
+            .err()
+            .expect("expected config error for rate_limit_max_wait_ms=0");
+        match err {
+            ProviderError::ConfigError(msg) => {
+                assert!(msg.contains("rate_limit_max_wait_ms=0"));
+            }
+            other => panic!("expected config error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_disabled_provider_with_invalid_rate_limit_is_skipped() {
+        let config = ProviderConfig {
+            name: "disabled-provider".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec![],
+            enabled: Some(false),
+            rate_limit_rpm: Some(0),
+            rate_limit_max_wait_ms: Some(0),
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None);
+        assert!(registry.is_ok(), "disabled providers should be skipped");
     }
 }

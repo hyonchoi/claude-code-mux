@@ -1,24 +1,25 @@
-mod openai_compat;
 mod oauth_handlers;
+mod openai_compat;
 
+use crate::auth::TokenStore;
 use crate::cli::AppConfig;
 use crate::models::AnthropicRequest;
-use crate::router::Router;
 use crate::providers::ProviderRegistry;
-use crate::auth::TokenStore;
+use crate::router::Router;
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::{
-        Html, IntoResponse, Response, sse::{Event, Sse},
+        sse::{Event, Sse},
+        Html, IntoResponse, Response,
     },
     routing::{get, post},
     Form, Json, Router as AxumRouter,
 };
+use futures::stream::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
-use futures::stream::StreamExt;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -66,7 +67,10 @@ fn strip_beta_options_from_request(
 }
 
 /// Start the HTTP server
-pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) -> anyhow::Result<()> {
+pub async fn start_server(
+    config: AppConfig,
+    config_path: std::path::PathBuf,
+) -> anyhow::Result<()> {
     let router = Router::new(config.clone());
 
     // Initialize OAuth token store FIRST (needed by provider registry)
@@ -75,16 +79,20 @@ pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) ->
 
     let existing_tokens = token_store.list_providers();
     if !existing_tokens.is_empty() {
-        info!("🔐 Loaded {} OAuth tokens from storage", existing_tokens.len());
+        info!(
+            "🔐 Loaded {} OAuth tokens from storage",
+            existing_tokens.len()
+        );
     }
 
     // Initialize provider registry from config (with token store)
     let provider_registry = Arc::new(
         ProviderRegistry::from_configs(&config.providers, Some(token_store.clone()))
-            .map_err(|e| anyhow::anyhow!("Failed to initialize provider registry: {}", e))?
+            .map_err(|e| anyhow::anyhow!("Failed to initialize provider registry: {}", e))?,
     );
 
-    info!("📦 Loaded {} providers with {} models",
+    info!(
+        "📦 Loaded {} providers with {} models",
         provider_registry.list_providers().len(),
         provider_registry.list_models().len()
     );
@@ -113,13 +121,22 @@ pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) ->
         .route("/api/config/json", post(update_config_json))
         .route("/api/restart", post(restart_server))
         // OAuth endpoints
-        .route("/api/oauth/authorize", post(oauth_handlers::oauth_authorize))
+        .route(
+            "/api/oauth/authorize",
+            post(oauth_handlers::oauth_authorize),
+        )
         .route("/api/oauth/exchange", post(oauth_handlers::oauth_exchange))
         .route("/api/oauth/callback", get(oauth_handlers::oauth_callback))
-        .route("/auth/callback", get(oauth_handlers::oauth_callback))  // OpenAI Codex uses this path
+        .route("/auth/callback", get(oauth_handlers::oauth_callback)) // OpenAI Codex uses this path
         .route("/api/oauth/tokens", get(oauth_handlers::oauth_list_tokens))
-        .route("/api/oauth/tokens/delete", post(oauth_handlers::oauth_delete_token))
-        .route("/api/oauth/tokens/refresh", post(oauth_handlers::oauth_refresh_token));
+        .route(
+            "/api/oauth/tokens/delete",
+            post(oauth_handlers::oauth_delete_token),
+        )
+        .route(
+            "/api/oauth/tokens/refresh",
+            post(oauth_handlers::oauth_refresh_token),
+        );
 
     // Clone state before moving it
     let oauth_state = state.clone();
@@ -148,7 +165,10 @@ pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) ->
             }
             Err(e) => {
                 // Don't fail if port 1455 is already in use - just warn
-                error!("⚠️  Failed to bind OAuth callback server on {}: {}", oauth_addr, e);
+                error!(
+                    "⚠️  Failed to bind OAuth callback server on {}: {}",
+                    oauth_addr, e
+                );
                 error!("⚠️  OpenAI Codex OAuth will not work. Port 1455 must be available.");
             }
         }
@@ -175,8 +195,12 @@ async fn health_check() -> impl IntoResponse {
 
 /// REMOVED: This endpoint was for LiteLLM integration which has been removed.
 /// Models are now managed through the provider registry and config.
-async fn get_models(State(_state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, AppError> {
-    Err(AppError::ParseError("This endpoint has been removed. Use /api/models-config instead.".to_string()))
+async fn get_models(
+    State(_state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Err(AppError::ParseError(
+        "This endpoint has been removed. Use /api/models-config instead.".to_string(),
+    ))
 }
 
 /// Get current routing configuration
@@ -219,7 +243,10 @@ async fn update_config(
 
     // Update router section
     if let Some(router) = config.get_mut("router").and_then(|v| v.as_table_mut()) {
-        router.insert("default".to_string(), toml::Value::String(update.default_model));
+        router.insert(
+            "default".to_string(),
+            toml::Value::String(update.default_model),
+        );
 
         if let Some(bg) = update.background_model {
             router.insert("background".to_string(), toml::Value::String(bg));
@@ -347,22 +374,30 @@ async fn update_config_json(
             }
             if let Some(ws) = router.get("websearch") {
                 if let Some(s) = ws.as_str() {
-                    router_table.insert("websearch".to_string(), toml::Value::String(s.to_string()));
+                    router_table
+                        .insert("websearch".to_string(), toml::Value::String(s.to_string()));
                 }
             }
             if let Some(bg) = router.get("background") {
                 if let Some(s) = bg.as_str() {
-                    router_table.insert("background".to_string(), toml::Value::String(s.to_string()));
+                    router_table
+                        .insert("background".to_string(), toml::Value::String(s.to_string()));
                 }
             }
             if let Some(auto_map) = router.get("auto_map_regex") {
                 if let Some(s) = auto_map.as_str() {
-                    router_table.insert("auto_map_regex".to_string(), toml::Value::String(s.to_string()));
+                    router_table.insert(
+                        "auto_map_regex".to_string(),
+                        toml::Value::String(s.to_string()),
+                    );
                 }
             }
             if let Some(bg_regex) = router.get("background_regex") {
                 if let Some(s) = bg_regex.as_str() {
-                    router_table.insert("background_regex".to_string(), toml::Value::String(s.to_string()));
+                    router_table.insert(
+                        "background_regex".to_string(),
+                        toml::Value::String(s.to_string()),
+                    );
                 }
             }
         }
@@ -414,14 +449,17 @@ async fn restart_server(State(state): State<Arc<AppState>>) -> Response {
 
 /// Create and execute a shell script that waits for shutdown and restarts
 fn create_and_execute_restart_script(port: u16) -> std::io::Result<()> {
-    use std::process::Command;
     use std::fs;
+    use std::process::Command;
 
     // Get current executable path and PID
     let exe_path = std::env::current_exe()?;
     let current_pid = std::process::id();
 
-    info!("Creating restart script for PID: {} on port: {}", current_pid, port);
+    info!(
+        "Creating restart script for PID: {} on port: {}",
+        current_pid, port
+    );
 
     #[cfg(unix)]
     {
@@ -507,7 +545,9 @@ pub fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
     if let Some(user_agent) = headers.get(header::USER_AGENT) {
         if let Ok(ua_str) = user_agent.to_str() {
             let ua_lower = ua_str.to_lowercase();
-            ua_lower.contains("claude-code/") || ua_lower.contains("claude-cli/") || ua_lower.contains("claudedesktop/")
+            ua_lower.contains("claude-code/")
+                || ua_lower.contains("claude-cli/")
+                || ua_lower.contains("claudedesktop/")
         } else {
             false
         }
@@ -519,20 +559,29 @@ pub fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
 /// Parses anthropic-beta header in CSV format
 /// Returns list of beta options or error if invalid
 pub fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
-    tracing::debug!("parse_anthropic_beta: starting parse of header: '{}'", header_value);
-    
+    tracing::debug!(
+        "parse_anthropic_beta: starting parse of header: '{}'",
+        header_value
+    );
+
     let options = header_value
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
-    
+
     if options.is_empty() {
-        tracing::debug!("parse_anthropic_beta: empty header value provided (header_value='{}')", header_value);
+        tracing::debug!(
+            "parse_anthropic_beta: empty header value provided (header_value='{}')",
+            header_value
+        );
         return Err("anthropic-beta header is empty".to_string());
     }
-    
-    tracing::debug!("parse_anthropic_beta: parsed {} options from header", options.len());
+
+    tracing::debug!(
+        "parse_anthropic_beta: parsed {} options from header",
+        options.len()
+    );
     for (i, option) in options.iter().enumerate() {
         tracing::debug!("parse_anthropic_beta: option[{}] = '{}'", i, option);
     }
@@ -556,7 +605,7 @@ pub fn validate_anthropic_beta(
         model_name,
         supported_options
     );
-    
+
     for (i, option) in beta_options.iter().enumerate() {
         tracing::debug!(
             "validate_anthropic_beta: checking option[{}] = '{}' for model '{}'",
@@ -564,7 +613,7 @@ pub fn validate_anthropic_beta(
             option,
             model_name
         );
-        
+
         if !supported_options.contains(option) {
             tracing::warn!(
                 "validate_anthropic_beta: option '{}' NOT found in supported list for model '{}'. Supported options: {:?}",
@@ -577,7 +626,7 @@ pub fn validate_anthropic_beta(
                 option, model_name
             ));
         }
-        
+
         tracing::debug!(
             "validate_anthropic_beta: option[{}] '{}' is VALID for model '{}'",
             i,
@@ -585,8 +634,12 @@ pub fn validate_anthropic_beta(
             model_name
         );
     }
-    
-    tracing::debug!("validate_anthropic_beta: ALL {} options VALIDATED successfully for model '{}'", beta_options.len(), model_name);
+
+    tracing::debug!(
+        "validate_anthropic_beta: ALL {} options VALIDATED successfully for model '{}'",
+        beta_options.len(),
+        model_name
+    );
     Ok(())
 }
 
@@ -604,17 +657,23 @@ async fn handle_openai_chat_completions(
     let passthrough_token = if is_claude_code_cli_request(&headers) {
         let token = extract_bearer_token(&headers);
         if token.is_none() && has_bearer_prefix(&headers) {
-            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+            return Err(AppError::AuthError(
+                "Invalid Bearer token format".to_string(),
+            ));
         }
         if token.is_none() && !has_bearer_prefix(&headers) {
             debug!("🔑 CC CLI request has no Bearer header — passthrough skipped");
         }
         token
     } else {
-        let ua = headers.get(header::USER_AGENT)
+        let ua = headers
+            .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("<none>");
-        debug!("🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped", ua);
+        debug!(
+            "🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped",
+            ua
+        );
         None
     };
 
@@ -631,9 +690,12 @@ async fn handle_openai_chat_completions(
         .get("anthropic-beta")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
-    
+
     if let Some(ref beta_header) = anthropic_request.anthropic_beta_header {
-        tracing::debug!("OpenAI request handler: extracted anthropic-beta header: '{}'", beta_header);
+        tracing::debug!(
+            "OpenAI request handler: extracted anthropic-beta header: '{}'",
+            beta_header
+        );
     } else {
         tracing::debug!("OpenAI request handler: no anthropic-beta header found in request");
     }
@@ -652,8 +714,17 @@ async fn handle_openai_chat_completions(
     );
 
     // 3. Try model mappings with fallback (1:N mapping)
-    if let Some(model_config) = state.config.models.iter().find(|m| m.name == decision.model_name) {
-        info!("📋 Found {} provider mappings for model: {}", model_config.mappings.len(), decision.model_name);
+    if let Some(model_config) = state
+        .config
+        .models
+        .iter()
+        .find(|m| m.name == decision.model_name)
+    {
+        info!(
+            "📋 Found {} provider mappings for model: {}",
+            model_config.mappings.len(),
+            decision.model_name
+        );
 
         // Check for X-Provider header to override priority
         let forced_provider = headers
@@ -663,7 +734,10 @@ async fn handle_openai_chat_completions(
             .map(|s| s.to_string());
 
         if let Some(ref provider_name) = forced_provider {
-            info!("🎯 Using forced provider from X-Provider header: {}", provider_name);
+            info!(
+                "🎯 Using forced provider from X-Provider header: {}",
+                provider_name
+            );
         }
 
         // Sort mappings by priority (or filter by forced provider)
@@ -687,7 +761,8 @@ async fn handle_openai_chat_completions(
             sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
             if sorted_mappings.is_empty() {
                 return Err(AppError::RoutingError(
-                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                    "No anthropic-type provider mappings available for passthrough request"
+                        .to_string(),
                 ));
             }
         }
@@ -696,6 +771,7 @@ async fn handle_openai_chat_completions(
         let original_beta_header = anthropic_request.anthropic_beta_header.clone();
 
         // Try each mapping in priority order (or just the forced one)
+        let mut fallback_failures = Vec::new();
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
                 "🔄 Trying mapping {}/{}: provider={}, actual_model={}",
@@ -742,51 +818,75 @@ async fn handle_openai_chat_completions(
                         return Ok(Json(openai_response).into_response());
                     }
                     Err(e) => {
-                        info!("⚠️ Provider {} failed: {}, trying next fallback", mapping.provider, e);
+                        info!(
+                            "⚠️ Provider {} failed: {}, trying next fallback",
+                            mapping.provider, e
+                        );
+                        fallback_failures.push(format!("{}: {}", mapping.provider, e));
                         continue;
                     }
                 }
             } else {
-                info!("⚠️ Provider {} not found in registry, trying next fallback", mapping.provider);
+                info!(
+                    "⚠️ Provider {} not found in registry, trying next fallback",
+                    mapping.provider
+                );
+                fallback_failures.push(format!(
+                    "{}: provider not found in registry",
+                    mapping.provider
+                ));
                 continue;
             }
         }
 
-        error!("❌ All provider mappings failed for model: {}", decision.model_name);
+        error!(
+            "❌ All provider mappings failed for model: {}. Last failures: {}",
+            decision.model_name,
+            fallback_failures.join(" | ")
+        );
         return Err(AppError::ProviderError(format!(
-            "All {} provider mappings failed for model: {}",
+            "All {} provider mappings failed for model: {} ({})",
             sorted_mappings.len(),
-            decision.model_name
+            decision.model_name,
+            fallback_failures.join(" | ")
         )));
     } else {
         if passthrough_token.is_some() {
             return Err(AppError::RoutingError(
-                "Passthrough auth requires explicit [[models]] configuration".to_string()
+                "Passthrough auth requires explicit [[models]] configuration".to_string(),
             ));
         }
 
         // No model mapping found, try direct provider registry lookup (backward compatibility)
-        if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
-            info!("📦 Using provider from registry (direct lookup): {}", decision.model_name);
+        if let Ok(provider) = state
+            .provider_registry
+            .get_provider_for_model(&decision.model_name)
+        {
+            info!(
+                "📦 Using provider from registry (direct lookup): {}",
+                decision.model_name
+            );
 
             // Update model to routed model
             anthropic_request.model = decision.model_name.clone();
 
             // Call provider
-            let anthropic_response = provider.send_message(anthropic_request)
+            let anthropic_response = provider
+                .send_message(anthropic_request)
                 .await
                 .map_err(|e| AppError::ProviderError(e.to_string()))?;
 
             // Transform to OpenAI format
-            let openai_response = openai_compat::transform_anthropic_to_openai(
-                anthropic_response,
-                model,
-            );
+            let openai_response =
+                openai_compat::transform_anthropic_to_openai(anthropic_response, model);
 
             return Ok(Json(openai_response).into_response());
         }
 
-        error!("❌ No model mapping or provider found for model: {}", decision.model_name);
+        error!(
+            "❌ No model mapping or provider found for model: {}",
+            decision.model_name
+        );
         return Err(AppError::ProviderError(format!(
             "No model mapping or provider found for model: {}",
             decision.model_name
@@ -816,17 +916,23 @@ async fn handle_messages(
     let passthrough_token = if is_claude_code_cli_request(&headers) {
         let token = extract_bearer_token(&headers);
         if token.is_none() && has_bearer_prefix(&headers) {
-            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+            return Err(AppError::AuthError(
+                "Invalid Bearer token format".to_string(),
+            ));
         }
         if token.is_none() && !has_bearer_prefix(&headers) {
             debug!("🔑 CC CLI request has no Bearer header — passthrough skipped");
         }
         token
     } else {
-        let ua = headers.get(header::USER_AGENT)
+        let ua = headers
+            .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("<none>");
-        debug!("🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped", ua);
+        debug!(
+            "🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped",
+            ua
+        );
         None
     };
 
@@ -861,18 +967,30 @@ async fn handle_messages(
     );
 
     // 3. Try model mappings with fallback (1:N mapping)
-    if let Some(model_config) = state.config.models.iter().find(|m| m.name == decision.model_name) {
-        info!("📋 Found {} provider mappings for model: {}", model_config.mappings.len(), decision.model_name);
+    if let Some(model_config) = state
+        .config
+        .models
+        .iter()
+        .find(|m| m.name == decision.model_name)
+    {
+        info!(
+            "📋 Found {} provider mappings for model: {}",
+            model_config.mappings.len(),
+            decision.model_name
+        );
 
         // Check for X-Provider header to override priority
         let forced_provider = headers
             .get("x-provider")
             .and_then(|v| v.to_str().ok())
-            .filter(|s| !s.is_empty())  // Ignore empty strings
+            .filter(|s| !s.is_empty()) // Ignore empty strings
             .map(|s| s.to_string());
 
         if let Some(ref provider_name) = forced_provider {
-            info!("🎯 Using forced provider from X-Provider header: {}", provider_name);
+            info!(
+                "🎯 Using forced provider from X-Provider header: {}",
+                provider_name
+            );
         }
 
         // Sort mappings by priority (or filter by forced provider)
@@ -897,12 +1015,14 @@ async fn handle_messages(
             sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
             if sorted_mappings.is_empty() {
                 return Err(AppError::RoutingError(
-                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                    "No anthropic-type provider mappings available for passthrough request"
+                        .to_string(),
                 ));
             }
         }
 
         // Try each mapping in priority order (or just the forced one)
+        let mut fallback_failures = Vec::new();
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
                 "🔄 Trying mapping {}/{}: provider={}, actual_model={}",
@@ -917,8 +1037,10 @@ async fn handle_messages(
                 // Trust the model mapping configuration - no need to validate
 
                 // Parse request as Anthropic format
-                let mut anthropic_request: AnthropicRequest = serde_json::from_value(request_json.clone())
-                    .map_err(|e| AppError::ParseError(format!("Invalid request format: {}", e)))?;
+                let mut anthropic_request: AnthropicRequest =
+                    serde_json::from_value(request_json.clone()).map_err(|e| {
+                        AppError::ParseError(format!("Invalid request format: {}", e))
+                    })?;
 
                 // Save original model name for response
                 let original_model = anthropic_request.model.clone();
@@ -943,7 +1065,10 @@ async fn handle_messages(
                 anthropic_request.system = request_for_routing.system.clone();
 
                 if passthrough_token.is_some() {
-                    info!("🔑 Passthrough auth active: original_model={}, target_provider={}", original_model, mapping.provider);
+                    info!(
+                        "🔑 Passthrough auth active: original_model={}, target_provider={}",
+                        original_model, mapping.provider
+                    );
                 }
 
                 // Check if streaming is requested
@@ -955,25 +1080,37 @@ async fn handle_messages(
 
                     match provider.send_message_stream(anthropic_request).await {
                         Ok(stream) => {
-                            info!("✅ Streaming request started with provider: {}", mapping.provider);
+                            info!(
+                                "✅ Streaming request started with provider: {}",
+                                mapping.provider
+                            );
 
                             // Convert byte stream to SSE response
                             // The provider returns raw bytes (SSE format), we pass them through
                             let sse_stream = stream.map(|result| {
-                                result.map(|bytes| {
-                                    // Convert bytes to string for SSE event
-                                    let data = String::from_utf8_lossy(&bytes).to_string();
-                                    Event::default().data(data)
-                                }).map_err(|e| {
-                                    error!("Stream error: {}", e);
-                                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                                })
+                                result
+                                    .map(|bytes| {
+                                        // Convert bytes to string for SSE event
+                                        let data = String::from_utf8_lossy(&bytes).to_string();
+                                        Event::default().data(data)
+                                    })
+                                    .map_err(|e| {
+                                        error!("Stream error: {}", e);
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::Other,
+                                            e.to_string(),
+                                        )
+                                    })
                             });
 
                             return Ok(Sse::new(sse_stream).into_response());
                         }
                         Err(e) => {
-                            info!("⚠️ Provider {} streaming failed: {}, trying next fallback", mapping.provider, e);
+                            info!(
+                                "⚠️ Provider {} streaming failed: {}, trying next fallback",
+                                mapping.provider, e
+                            );
+                            fallback_failures.push(format!("{} (stream): {}", mapping.provider, e));
                             continue;
                         }
                     }
@@ -983,42 +1120,68 @@ async fn handle_messages(
                         Ok(mut response) => {
                             // Restore original model name in response
                             response.model = original_model;
-                            info!("✅ Request succeeded with provider: {}, response model: {}", mapping.provider, response.model);
+                            info!(
+                                "✅ Request succeeded with provider: {}, response model: {}",
+                                mapping.provider, response.model
+                            );
                             return Ok(Json(response).into_response());
                         }
                         Err(e) => {
-                            info!("⚠️ Provider {} failed: {}, trying next fallback", mapping.provider, e);
+                            info!(
+                                "⚠️ Provider {} failed: {}, trying next fallback",
+                                mapping.provider, e
+                            );
+                            fallback_failures.push(format!("{}: {}", mapping.provider, e));
                             continue;
                         }
                     }
                 }
             } else {
-                info!("⚠️ Provider {} not found in registry, trying next fallback", mapping.provider);
+                info!(
+                    "⚠️ Provider {} not found in registry, trying next fallback",
+                    mapping.provider
+                );
+                fallback_failures.push(format!(
+                    "{}: provider not found in registry",
+                    mapping.provider
+                ));
                 continue;
             }
         }
 
-        error!("❌ All provider mappings failed for model: {}", decision.model_name);
+        error!(
+            "❌ All provider mappings failed for model: {}. Last failures: {}",
+            decision.model_name,
+            fallback_failures.join(" | ")
+        );
         return Err(AppError::ProviderError(format!(
-            "All {} provider mappings failed for model: {}",
+            "All {} provider mappings failed for model: {} ({})",
             sorted_mappings.len(),
-            decision.model_name
+            decision.model_name,
+            fallback_failures.join(" | ")
         )));
     } else {
         // Passthrough requires explicit model mappings to enforce provider-type filtering
         if passthrough_token.is_some() {
             return Err(AppError::RoutingError(
-                "Passthrough auth requires explicit [[models]] configuration".to_string()
+                "Passthrough auth requires explicit [[models]] configuration".to_string(),
             ));
         }
 
         // No model mapping found, try direct provider registry lookup (backward compatibility)
-        if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
-            info!("📦 Using provider from registry (direct lookup): {}", decision.model_name);
+        if let Ok(provider) = state
+            .provider_registry
+            .get_provider_for_model(&decision.model_name)
+        {
+            info!(
+                "📦 Using provider from registry (direct lookup): {}",
+                decision.model_name
+            );
 
             // Parse request as Anthropic format
-            let mut anthropic_request: AnthropicRequest = serde_json::from_value(request_json.clone())
-                .map_err(|e| AppError::ParseError(format!("Invalid request format: {}", e)))?;
+            let mut anthropic_request: AnthropicRequest =
+                serde_json::from_value(request_json.clone())
+                    .map_err(|e| AppError::ParseError(format!("Invalid request format: {}", e)))?;
 
             // Save original model name for response
             let original_model = anthropic_request.model.clone();
@@ -1030,7 +1193,8 @@ async fn handle_messages(
             anthropic_request.system = request_for_routing.system.clone();
 
             // Call provider
-            let mut provider_response = provider.send_message(anthropic_request)
+            let mut provider_response = provider
+                .send_message(anthropic_request)
                 .await
                 .map_err(|e| AppError::ProviderError(e.to_string()))?;
 
@@ -1041,7 +1205,10 @@ async fn handle_messages(
             return Ok(Json(provider_response).into_response());
         }
 
-        error!("❌ No model mapping or provider found for model: {}", decision.model_name);
+        error!(
+            "❌ No model mapping or provider found for model: {}",
+            decision.model_name
+        );
         return Err(AppError::ProviderError(format!(
             "No model mapping or provider found for model: {}",
             decision.model_name
@@ -1055,23 +1222,32 @@ async fn handle_count_tokens(
     headers: HeaderMap,
     Json(request_json): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
-    let model = request_json.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
+    let model = request_json
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("unknown");
     info!("Received count_tokens request for model: {}", model);
 
     let passthrough_token = if is_claude_code_cli_request(&headers) {
         let token = extract_bearer_token(&headers);
         if token.is_none() && has_bearer_prefix(&headers) {
-            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+            return Err(AppError::AuthError(
+                "Invalid Bearer token format".to_string(),
+            ));
         }
         if token.is_none() && !has_bearer_prefix(&headers) {
             debug!("🔑 CC CLI count_tokens request has no Bearer header — passthrough skipped");
         }
         token
     } else {
-        let ua = headers.get(header::USER_AGENT)
+        let ua = headers
+            .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("<none>");
-        debug!("🔑 Non-CC-CLI count_tokens request (User-Agent: '{}') — passthrough skipped", ua);
+        debug!(
+            "🔑 Non-CC-CLI count_tokens request (User-Agent: '{}') — passthrough skipped",
+            ua
+        );
         None
     };
 
@@ -1112,8 +1288,17 @@ async fn handle_count_tokens(
     );
 
     // 3. Try model mappings with fallback (1:N mapping)
-    if let Some(model_config) = state.config.models.iter().find(|m| m.name == decision.model_name) {
-        info!("📋 Found {} provider mappings for token counting: {}", model_config.mappings.len(), decision.model_name);
+    if let Some(model_config) = state
+        .config
+        .models
+        .iter()
+        .find(|m| m.name == decision.model_name)
+    {
+        info!(
+            "📋 Found {} provider mappings for token counting: {}",
+            model_config.mappings.len(),
+            decision.model_name
+        );
 
         // Sort mappings by priority
         let mut sorted_mappings = model_config.mappings.clone();
@@ -1123,7 +1308,8 @@ async fn handle_count_tokens(
             sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
             if sorted_mappings.is_empty() {
                 return Err(AppError::RoutingError(
-                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                    "No anthropic-type provider mappings available for passthrough request"
+                        .to_string(),
                 ));
             }
         }
@@ -1150,21 +1336,33 @@ async fn handle_count_tokens(
                 // Call provider's count_tokens
                 match provider.count_tokens(count_request_for_provider).await {
                     Ok(response) => {
-                        info!("✅ Token count succeeded with provider: {}", mapping.provider);
+                        info!(
+                            "✅ Token count succeeded with provider: {}",
+                            mapping.provider
+                        );
                         return Ok(Json(response).into_response());
                     }
                     Err(e) => {
-                        info!("⚠️ Provider {} failed: {}, trying next fallback", mapping.provider, e);
+                        info!(
+                            "⚠️ Provider {} failed: {}, trying next fallback",
+                            mapping.provider, e
+                        );
                         continue;
                     }
                 }
             } else {
-                info!("⚠️ Provider {} not found in registry, trying next fallback", mapping.provider);
+                info!(
+                    "⚠️ Provider {} not found in registry, trying next fallback",
+                    mapping.provider
+                );
                 continue;
             }
         }
 
-        error!("❌ All provider mappings failed for token counting: {}", decision.model_name);
+        error!(
+            "❌ All provider mappings failed for token counting: {}",
+            decision.model_name
+        );
         return Err(AppError::ProviderError(format!(
             "All {} provider mappings failed for token counting: {}",
             sorted_mappings.len(),
@@ -1172,8 +1370,14 @@ async fn handle_count_tokens(
         )));
     } else {
         // No model mapping found, try direct provider registry lookup (backward compatibility)
-        if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
-            info!("📦 Using provider from registry (direct lookup) for token counting: {}", decision.model_name);
+        if let Ok(provider) = state
+            .provider_registry
+            .get_provider_for_model(&decision.model_name)
+        {
+            info!(
+                "📦 Using provider from registry (direct lookup) for token counting: {}",
+                decision.model_name
+            );
 
             // Update model to routed model and include passthrough auth if present
             let mut count_request_for_provider = count_request.clone();
@@ -1181,7 +1385,8 @@ async fn handle_count_tokens(
             count_request_for_provider.passthrough_auth = passthrough_token.clone();
 
             // Call provider's count_tokens
-            let response = provider.count_tokens(count_request_for_provider)
+            let response = provider
+                .count_tokens(count_request_for_provider)
                 .await
                 .map_err(|e| AppError::ProviderError(e.to_string()))?;
 
@@ -1189,7 +1394,10 @@ async fn handle_count_tokens(
             return Ok(Json(response).into_response());
         }
 
-        error!("❌ No model mapping or provider found for token counting: {}", decision.model_name);
+        error!(
+            "❌ No model mapping or provider found for token counting: {}",
+            decision.model_name
+        );
         return Err(AppError::ProviderError(format!(
             "No model mapping or provider found for token counting: {}",
             decision.model_name
@@ -1240,7 +1448,7 @@ impl std::fmt::Display for AppError {
 impl std::error::Error for AppError {}
 
 /// Extract and validate Bearer token from Authorization header
-/// 
+///
 /// Validates:
 /// Returns true if the Authorization header is present and starts with "Bearer ".
 /// Used to detect malformed bearer tokens (present but invalid) vs absent header.
@@ -1270,19 +1478,19 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
             if !s[..7].eq_ignore_ascii_case("Bearer ") {
                 return None;
             }
-            
+
             let token = s[7..].trim();
-            
+
             // Reject empty tokens
             if token.is_empty() {
                 return None;
             }
-            
+
             // Reject tokens exceeding max length (8KB)
             if token.len() > 8192 {
                 return None;
             }
-            
+
             // Validate token contains only safe characters
             // Bearer tokens can contain: alphanumeric, - _ . ~ + / =
             // Reject any control characters or CRLF
@@ -1297,15 +1505,15 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
                 }
                 return None;
             }
-            
+
             Some(token.to_string())
         })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::providers::ProviderConfig;
     use super::is_anthropic_provider;
+    use crate::providers::ProviderConfig;
 
     fn make_configs() -> Vec<ProviderConfig> {
         vec![
@@ -1398,15 +1606,13 @@ mod tests {
 
         let configs = make_configs(); // ant1=anthropic, oai1=openai
 
-        let mappings = vec![
-            ModelMapping {
-                provider: "oai1".to_string(),
-                actual_model: "gpt-4o".to_string(),
-                priority: 1,
-                strip_beta_options: false,
-                strip_specific_beta: vec![],
-            },
-        ];
+        let mappings = vec![ModelMapping {
+            provider: "oai1".to_string(),
+            actual_model: "gpt-4o".to_string(),
+            priority: 1,
+            strip_beta_options: false,
+            strip_specific_beta: vec![],
+        }];
 
         let filtered: Vec<_> = mappings
             .into_iter()
