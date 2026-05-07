@@ -667,9 +667,8 @@
                                         <input
                                             type="radio"
                                             name="provider_type"
-                                            value="anthropic"
+                                            value="nvidia-nim"
                                             class="peer sr-only"
-                                            data-provider-name="nvidia-nim"
                                         />
                                         <div
                                             class="p-6 border-2 border-gray-200 rounded-xl peer-checked:border-blue-600 peer-checked:bg-blue-50 hover:border-gray-300 transition-all"
@@ -1357,11 +1356,12 @@
                                     >
                                     <input
                                         type="url"
+                                        id="base-url-input"
                                         name="base_url"
                                         class="input-field font-mono"
                                         placeholder="https://api.anthropic.com"
                                     />
-                                    <div class="helper-text">
+                                    <div class="helper-text" id="base-url-helper-text">
                                         Only enter if you want to use a
                                         different URL than the default endpoint
                                     </div>
@@ -3982,6 +3982,8 @@
                     document.getElementById("auth-type-selector");
                 const authCardTitle =
                     document.getElementById("auth-card-title");
+                const baseUrlInput = document.getElementById("base-url-input");
+                const baseUrlHelper = document.getElementById("base-url-helper-text");
 
                 // Show/hide Vertex AI config based on provider type
                 const vertexProjectIdField = document.getElementById("vertex-project-id");
@@ -4005,6 +4007,18 @@
                     // Remove required attributes when not Vertex AI
                     if (vertexProjectIdField) vertexProjectIdField.removeAttribute("required");
                     if (vertexLocationField) vertexLocationField.removeAttribute("required");
+                }
+
+                if (baseUrlInput && baseUrlHelper) {
+                    if (providerType === "nvidia-nim") {
+                        baseUrlInput.placeholder = "https://integrate.api.nvidia.com/v1";
+                        baseUrlHelper.textContent =
+                            "Defaults to NVIDIA NIM Cloud API. Override only if you use a different endpoint.";
+                    } else {
+                        baseUrlInput.placeholder = "https://api.anthropic.com";
+                        baseUrlHelper.textContent =
+                            "Only enter if you want to use a different URL than the default endpoint";
+                    }
                 }
 
                 if (providerType === "openai") {

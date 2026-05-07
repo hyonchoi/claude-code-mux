@@ -21,7 +21,7 @@
 
 [[providers]]
 name = "nvidia-nim"
-provider_type = "anthropic"
+provider_type = "nvidia-nim"
 # Your NVIDIA NIM API key from https://build.nvidia.com/
 api_key = "your-nvidia-nim-api-key-here"
 # NVIDIA's cloud endpoint for NIM
@@ -49,7 +49,7 @@ models = []
 #
 # [[providers]]
 # name = "nvidia-nim-self-hosted"
-# provider_type = "anthropic"
+# provider_type = "nvidia-nim"
 # api_key = "your-self-hosted-nim-api-key"  # If authentication is configured
 # base_url = "https://your-domain.com/v1"  # Your self-hosted endpoint
 # enabled = false
@@ -66,7 +66,7 @@ models = []
 #
 # [[providers]]
 # name = "nvidia-nim-local"
-# provider_type = "anthropic"
+# provider_type = "nvidia-nim"
 # api_key = ""  # Leave empty for local deployments
 # base_url = "http://localhost:8000/v1"
 # enabled = false

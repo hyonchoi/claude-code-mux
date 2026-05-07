@@ -580,7 +580,7 @@ Result: glm-4.6 (original model name, routed through model mappings)
 ```toml
 [[providers]]
 name = "nvidia-nim"
-provider_type = "anthropic"
+provider_type = "nvidia-nim"
 # Get your free API key from https://build.nvidia.com/
 api_key = "your-nvidia-nim-api-key-here"
 # NVIDIA's cloud endpoint

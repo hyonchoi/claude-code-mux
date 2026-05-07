@@ -106,6 +106,22 @@ impl ProviderRegistry {
                     )
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
+                "nvidia-nim" => Box::new(
+                    AnthropicCompatibleProvider::new_with_options_and_auth(
+                        config.name.clone(),
+                        api_key,
+                        config
+                            .base_url
+                            .clone()
+                            .unwrap_or_else(|| "https://integrate.api.nvidia.com/v1".to_string()),
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        config.oauth_provider.clone(),
+                        token_store.clone(),
+                        config.supported_beta_options.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
                 "z.ai" => Box::new(
                     AnthropicCompatibleProvider::zai_with_auth(
                         api_key,
@@ -333,7 +349,7 @@ mod tests {
     fn test_nvidia_nim_provider_config_with_rate_limit() {
         let config = ProviderConfig {
             name: "nvidia-nim".to_string(),
-            provider_type: "anthropic".to_string(),
+            provider_type: "nvidia-nim".to_string(),
             auth_type: Default::default(),
             supported_beta_options: vec![],
             api_key: Some("test-key".to_string()),
@@ -349,7 +365,7 @@ mod tests {
 
         // Verify provider configuration has rate limit set
         assert_eq!(config.name, "nvidia-nim");
-        assert_eq!(config.provider_type, "anthropic");
+        assert_eq!(config.provider_type, "nvidia-nim");
         assert_eq!(config.rate_limit_rpm, Some(40));
         assert_eq!(
             config.base_url,
@@ -361,7 +377,7 @@ mod tests {
     fn test_provider_registry_with_nvidia_nim() {
         let config = ProviderConfig {
             name: "nvidia-nim".to_string(),
-            provider_type: "anthropic".to_string(),
+            provider_type: "nvidia-nim".to_string(),
             auth_type: Default::default(),
             supported_beta_options: vec![],
             api_key: Some("test-key".to_string()),
@@ -412,7 +428,7 @@ mod tests {
     fn test_rate_limit_rpm_zero_is_rejected() {
         let config = ProviderConfig {
             name: "nvidia-nim".to_string(),
-            provider_type: "anthropic".to_string(),
+            provider_type: "nvidia-nim".to_string(),
             auth_type: Default::default(),
             supported_beta_options: vec![],
             api_key: Some("test-key".to_string()),
@@ -441,7 +457,7 @@ mod tests {
     fn test_rate_limit_max_wait_zero_is_rejected() {
         let config = ProviderConfig {
             name: "nvidia-nim".to_string(),
-            provider_type: "anthropic".to_string(),
+            provider_type: "nvidia-nim".to_string(),
             auth_type: Default::default(),
             supported_beta_options: vec![],
             api_key: Some("test-key".to_string()),

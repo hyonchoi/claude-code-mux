@@ -64,7 +64,7 @@ enabled = false
 # Common NVIDIA NIM models: meta-llama-3.1-405b-instruct, meta-llama-3.1-70b-instruct, etc.
 models = []
 name = "nvidia-nim"
-provider_type = "anthropic"
+provider_type = "nvidia-nim"
 
 [router]
 background = "glm-4.5-air"

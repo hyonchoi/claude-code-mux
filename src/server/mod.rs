@@ -531,12 +531,15 @@ start "" "{}" start --port {}
     Ok(())
 }
 
-/// Returns true if the named provider has provider_type == "anthropic".
-fn is_anthropic_provider(providers: &[crate::providers::ProviderConfig], name: &str) -> bool {
+/// Returns true if the named provider is eligible for passthrough routing.
+fn is_anthropic_compatible_provider(
+    providers: &[crate::providers::ProviderConfig],
+    name: &str,
+) -> bool {
     providers
         .iter()
         .find(|p| p.name == name)
-        .map(|p| p.provider_type == "anthropic")
+        .map(|p| matches!(p.provider_type.as_str(), "anthropic" | "nvidia-nim"))
         .unwrap_or(false)
 }
 
@@ -758,10 +761,11 @@ async fn handle_openai_chat_completions(
         }
 
         if passthrough_token.is_some() {
-            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            sorted_mappings
+                .retain(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider));
             if sorted_mappings.is_empty() {
                 return Err(AppError::RoutingError(
-                    "No anthropic-type provider mappings available for passthrough request"
+                    "No passthrough-capable provider mappings available for this request"
                         .to_string(),
                 ));
             }
@@ -1012,10 +1016,11 @@ async fn handle_messages(
 
         // In passthrough mode, restrict to anthropic-type providers only
         if passthrough_token.is_some() {
-            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            sorted_mappings
+                .retain(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider));
             if sorted_mappings.is_empty() {
                 return Err(AppError::RoutingError(
-                    "No anthropic-type provider mappings available for passthrough request"
+                    "No passthrough-capable provider mappings available for this request"
                         .to_string(),
                 ));
             }
@@ -1305,10 +1310,11 @@ async fn handle_count_tokens(
         sorted_mappings.sort_by_key(|m| m.priority);
 
         if passthrough_token.is_some() {
-            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            sorted_mappings
+                .retain(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider));
             if sorted_mappings.is_empty() {
                 return Err(AppError::RoutingError(
-                    "No anthropic-type provider mappings available for passthrough request"
+                    "No passthrough-capable provider mappings available for this request"
                         .to_string(),
                 ));
             }
@@ -1512,7 +1518,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_anthropic_provider;
+    use super::is_anthropic_compatible_provider;
     use crate::providers::ProviderConfig;
 
     fn make_configs() -> Vec<ProviderConfig> {
@@ -1527,6 +1533,21 @@ mod tests {
                 project_id: None,
                 location: None,
                 base_url: None,
+                models: vec![],
+                enabled: Some(true),
+                rate_limit_rpm: None,
+                rate_limit_max_wait_ms: None,
+            },
+            ProviderConfig {
+                name: "nim1".to_string(),
+                provider_type: "nvidia-nim".to_string(),
+                auth_type: Default::default(),
+                supported_beta_options: vec![],
+                api_key: Some("k".to_string()),
+                oauth_provider: None,
+                project_id: None,
+                location: None,
+                base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
                 models: vec![],
                 enabled: Some(true),
                 rate_limit_rpm: None,
@@ -1551,28 +1572,34 @@ mod tests {
     }
 
     #[test]
-    fn test_is_anthropic_provider_returns_true_for_anthropic_type() {
+    fn test_is_anthropic_compatible_provider_returns_true_for_anthropic_type() {
         let configs = make_configs();
-        assert!(is_anthropic_provider(&configs, "ant1"));
+        assert!(is_anthropic_compatible_provider(&configs, "ant1"));
     }
 
     #[test]
-    fn test_is_anthropic_provider_returns_false_for_openai_type() {
+    fn test_is_anthropic_compatible_provider_returns_true_for_nvidia_nim_type() {
         let configs = make_configs();
-        assert!(!is_anthropic_provider(&configs, "oai1"));
+        assert!(is_anthropic_compatible_provider(&configs, "nim1"));
     }
 
     #[test]
-    fn test_is_anthropic_provider_returns_false_for_unknown_name() {
+    fn test_is_anthropic_compatible_provider_returns_false_for_openai_type() {
         let configs = make_configs();
-        assert!(!is_anthropic_provider(&configs, "unknown"));
+        assert!(!is_anthropic_compatible_provider(&configs, "oai1"));
     }
 
     #[test]
-    fn test_passthrough_filter_excludes_non_anthropic_mappings() {
+    fn test_is_anthropic_compatible_provider_returns_false_for_unknown_name() {
+        let configs = make_configs();
+        assert!(!is_anthropic_compatible_provider(&configs, "unknown"));
+    }
+
+    #[test]
+    fn test_passthrough_filter_includes_anthropic_compatible_mappings() {
         use crate::cli::ModelMapping;
 
-        let configs = make_configs(); // ant1=anthropic, oai1=openai
+        let configs = make_configs(); // ant1=anthropic, nim1=nvidia-nim, oai1=openai
 
         let mappings = vec![
             ModelMapping {
@@ -1583,9 +1610,16 @@ mod tests {
                 strip_specific_beta: vec![],
             },
             ModelMapping {
+                provider: "nim1".to_string(),
+                actual_model: "meta-llama-3.1-405b-instruct".to_string(),
+                priority: 2,
+                strip_beta_options: false,
+                strip_specific_beta: vec![],
+            },
+            ModelMapping {
                 provider: "oai1".to_string(),
                 actual_model: "gpt-4o".to_string(),
-                priority: 2,
+                priority: 3,
                 strip_beta_options: false,
                 strip_specific_beta: vec![],
             },
@@ -1593,15 +1627,16 @@ mod tests {
 
         let filtered: Vec<_> = mappings
             .into_iter()
-            .filter(|m| is_anthropic_provider(&configs, &m.provider))
+            .filter(|m| is_anthropic_compatible_provider(&configs, &m.provider))
             .collect();
 
-        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].provider, "ant1");
+        assert_eq!(filtered[1].provider, "nim1");
     }
 
     #[test]
-    fn test_passthrough_filter_empty_when_no_anthropic_mappings() {
+    fn test_passthrough_filter_empty_when_no_compatible_mappings() {
         use crate::cli::ModelMapping;
 
         let configs = make_configs(); // ant1=anthropic, oai1=openai
@@ -1616,7 +1651,7 @@ mod tests {
 
         let filtered: Vec<_> = mappings
             .into_iter()
-            .filter(|m| is_anthropic_provider(&configs, &m.provider))
+            .filter(|m| is_anthropic_compatible_provider(&configs, &m.provider))
             .collect();
 
         assert!(filtered.is_empty());
