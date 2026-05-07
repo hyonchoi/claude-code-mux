@@ -8,7 +8,7 @@ use crate::providers::ProviderRegistry;
 use crate::auth::TokenStore;
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{
         Html, IntoResponse, Response, sse::{Event, Sse},
     },
@@ -17,7 +17,7 @@ use axum::{
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use futures::stream::StreamExt;
 
 /// Application state shared across handlers
@@ -28,6 +28,41 @@ pub struct AppState {
     pub provider_registry: Arc<ProviderRegistry>,
     pub token_store: TokenStore,
     pub config_path: std::path::PathBuf,
+}
+
+/// Strip beta options from an AnthropicRequest based on mapping configuration
+fn strip_beta_options_from_request(
+    request: &mut AnthropicRequest,
+    strip_all: bool,
+    strip_specific: &[String],
+) {
+    // If we should strip all beta options
+    if strip_all {
+        request.anthropic_beta_header = None;
+        info!("📝 Stripped all beta options from request");
+        return;
+    }
+
+    // If we have specific beta options to strip
+    if !strip_specific.is_empty() {
+        if let Some(ref beta_header) = request.anthropic_beta_header {
+            // Parse comma-separated beta options and filter out the ones to strip
+            let options: Vec<&str> = beta_header.split(',').map(|s| s.trim()).collect();
+            let filtered: Vec<&str> = options
+                .iter()
+                .filter(|opt| !strip_specific.iter().any(|s| opt.starts_with(s.as_str())))
+                .copied()
+                .collect();
+
+            if filtered.is_empty() {
+                request.anthropic_beta_header = None;
+                info!("📝 Stripped all specified beta options; header is now empty");
+            } else if filtered.len() < options.len() {
+                request.anthropic_beta_header = Some(filtered.join(", "));
+                info!("📝 Stripped specific beta options: {:?}", strip_specific);
+            }
+        }
+    }
 }
 
 /// Start the HTTP server
@@ -458,6 +493,103 @@ start "" "{}" start --port {}
     Ok(())
 }
 
+/// Returns true if the named provider has provider_type == "anthropic".
+fn is_anthropic_provider(providers: &[crate::providers::ProviderConfig], name: &str) -> bool {
+    providers
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| p.provider_type == "anthropic")
+        .unwrap_or(false)
+}
+
+/// Detects Claude Code CLI requests via User-Agent header matching
+pub fn is_claude_code_cli_request(headers: &HeaderMap) -> bool {
+    if let Some(user_agent) = headers.get(header::USER_AGENT) {
+        if let Ok(ua_str) = user_agent.to_str() {
+            let ua_lower = ua_str.to_lowercase();
+            ua_lower.contains("claude-code/") || ua_lower.contains("claude-cli/") || ua_lower.contains("claudedesktop/")
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+/// Parses anthropic-beta header in CSV format
+/// Returns list of beta options or error if invalid
+pub fn parse_anthropic_beta(header_value: &str) -> Result<Vec<String>, String> {
+    tracing::debug!("parse_anthropic_beta: starting parse of header: '{}'", header_value);
+    
+    let options = header_value
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    
+    if options.is_empty() {
+        tracing::debug!("parse_anthropic_beta: empty header value provided (header_value='{}')", header_value);
+        return Err("anthropic-beta header is empty".to_string());
+    }
+    
+    tracing::debug!("parse_anthropic_beta: parsed {} options from header", options.len());
+    for (i, option) in options.iter().enumerate() {
+        tracing::debug!("parse_anthropic_beta: option[{}] = '{}'", i, option);
+    }
+    tracing::debug!("parse_anthropic_beta: parsed options: {:?}", options);
+    Ok(options)
+}
+
+/// Validates anthropic-beta options against supported model options
+pub fn validate_anthropic_beta(
+    beta_options: &[String],
+    supported_options: &[String],
+    model_name: &str,
+) -> Result<(), String> {
+    tracing::debug!(
+        "validate_anthropic_beta: starting validation for model '{}' with {} requested options",
+        model_name,
+        beta_options.len()
+    );
+    tracing::debug!(
+        "validate_anthropic_beta: supported options for model '{}': {:?}",
+        model_name,
+        supported_options
+    );
+    
+    for (i, option) in beta_options.iter().enumerate() {
+        tracing::debug!(
+            "validate_anthropic_beta: checking option[{}] = '{}' for model '{}'",
+            i,
+            option,
+            model_name
+        );
+        
+        if !supported_options.contains(option) {
+            tracing::warn!(
+                "validate_anthropic_beta: option '{}' NOT found in supported list for model '{}'. Supported options: {:?}",
+                option,
+                model_name,
+                supported_options
+            );
+            return Err(format!(
+                "Option '{}' not supported for model '{}'",
+                option, model_name
+            ));
+        }
+        
+        tracing::debug!(
+            "validate_anthropic_beta: option[{}] '{}' is VALID for model '{}'",
+            i,
+            option,
+            model_name
+        );
+    }
+    
+    tracing::debug!("validate_anthropic_beta: ALL {} options VALIDATED successfully for model '{}'", beta_options.len(), model_name);
+    Ok(())
+}
+
 /// Handle /v1/chat/completions requests (OpenAI-compatible endpoint)
 async fn handle_openai_chat_completions(
     State(state): State<Arc<AppState>>,
@@ -467,9 +599,44 @@ async fn handle_openai_chat_completions(
     let model = openai_request.model.clone();
     info!("Received OpenAI-compatible request for model: {}", model);
 
+    // Extract and validate bearer token for passthrough mode.
+    // Only CC CLI requests are eligible; a present-but-invalid Bearer header is rejected.
+    let passthrough_token = if is_claude_code_cli_request(&headers) {
+        let token = extract_bearer_token(&headers);
+        if token.is_none() && has_bearer_prefix(&headers) {
+            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+        }
+        if token.is_none() && !has_bearer_prefix(&headers) {
+            debug!("🔑 CC CLI request has no Bearer header — passthrough skipped");
+        }
+        token
+    } else {
+        let ua = headers.get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("<none>");
+        debug!("🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped", ua);
+        None
+    };
+
+    if passthrough_token.is_some() {
+        info!("🔑 Passthrough mode detected (caller-provided bearer token)");
+    }
+
     // 1. Transform OpenAI request to Anthropic format
     let mut anthropic_request = openai_compat::transform_openai_to_anthropic(openai_request)
         .map_err(|e| AppError::ParseError(format!("Failed to transform OpenAI request: {}", e)))?;
+
+    anthropic_request.passthrough_auth = passthrough_token.clone();
+    anthropic_request.anthropic_beta_header = headers
+        .get("anthropic-beta")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    
+    if let Some(ref beta_header) = anthropic_request.anthropic_beta_header {
+        tracing::debug!("OpenAI request handler: extracted anthropic-beta header: '{}'", beta_header);
+    } else {
+        tracing::debug!("OpenAI request handler: no anthropic-beta header found in request");
+    }
 
     info!("Transformed OpenAI request to Anthropic format");
 
@@ -516,6 +683,18 @@ async fn handle_openai_chat_completions(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
+        if passthrough_token.is_some() {
+            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            if sorted_mappings.is_empty() {
+                return Err(AppError::RoutingError(
+                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                ));
+            }
+        }
+
+        // Save original beta header to restore for each mapping attempt
+        let original_beta_header = anthropic_request.anthropic_beta_header.clone();
+
         // Try each mapping in priority order (or just the forced one)
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
@@ -530,6 +709,16 @@ async fn handle_openai_chat_completions(
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Update model to actual model name
                 anthropic_request.model = mapping.actual_model.clone();
+
+                // Restore original beta header before applying mapping-specific stripping
+                anthropic_request.anthropic_beta_header = original_beta_header.clone();
+
+                // Strip beta options if configured in the mapping
+                strip_beta_options_from_request(
+                    &mut anthropic_request,
+                    mapping.strip_beta_options,
+                    &mapping.strip_specific_beta,
+                );
 
                 // Check if streaming is requested
                 let is_streaming = anthropic_request.stream == Some(true);
@@ -570,6 +759,12 @@ async fn handle_openai_chat_completions(
             decision.model_name
         )));
     } else {
+        if passthrough_token.is_some() {
+            return Err(AppError::RoutingError(
+                "Passthrough auth requires explicit [[models]] configuration".to_string()
+            ));
+        }
+
         // No model mapping found, try direct provider registry lookup (backward compatibility)
         if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
             info!("📦 Using provider from registry (direct lookup): {}", decision.model_name);
@@ -616,12 +811,43 @@ async fn handle_messages(
         tracing::debug!("📥 Incoming request body:\n{}", json_str);
     }
 
+    // Extract and validate bearer token for passthrough mode.
+    // Only CC CLI requests are eligible; a present-but-invalid Bearer header is rejected.
+    let passthrough_token = if is_claude_code_cli_request(&headers) {
+        let token = extract_bearer_token(&headers);
+        if token.is_none() && has_bearer_prefix(&headers) {
+            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+        }
+        if token.is_none() && !has_bearer_prefix(&headers) {
+            debug!("🔑 CC CLI request has no Bearer header — passthrough skipped");
+        }
+        token
+    } else {
+        let ua = headers.get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("<none>");
+        debug!("🔑 Non-CC-CLI request (User-Agent: '{}') — passthrough skipped", ua);
+        None
+    };
+
+    if passthrough_token.is_some() {
+        info!("🔑 Passthrough mode detected (caller-provided bearer token)");
+    }
+
+    let incoming_beta_header = headers
+        .get("anthropic-beta")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
     // 1. Parse request for routing decision (mutable for tag extraction)
     let mut request_for_routing: AnthropicRequest = serde_json::from_value(request_json.clone())
         .map_err(|e| {
             tracing::error!("❌ Failed to parse request: {}", e);
             AppError::ParseError(format!("Invalid request format: {}", e))
         })?;
+
+    request_for_routing.passthrough_auth = passthrough_token.clone();
+    request_for_routing.anthropic_beta_header = incoming_beta_header.clone();
 
     // 2. Route the request (may modify system prompt to remove CCM-SUBAGENT-MODEL tag)
     let decision = state
@@ -666,6 +892,16 @@ async fn handle_messages(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
+        // In passthrough mode, restrict to anthropic-type providers only
+        if passthrough_token.is_some() {
+            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            if sorted_mappings.is_empty() {
+                return Err(AppError::RoutingError(
+                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                ));
+            }
+        }
+
         // Try each mapping in priority order (or just the forced one)
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
@@ -690,8 +926,25 @@ async fn handle_messages(
                 // Update model to actual model name
                 anthropic_request.model = mapping.actual_model.clone();
 
+                // Propagate passthrough auth and beta header before stripping, so the
+                // strip logic can see the actual header value (anthropic_beta_header is
+                // #[serde(skip)] and therefore always None after JSON deserialization)
+                anthropic_request.passthrough_auth = passthrough_token.clone();
+                anthropic_request.anthropic_beta_header = incoming_beta_header.clone();
+
+                // Strip beta options if configured in the mapping
+                strip_beta_options_from_request(
+                    &mut anthropic_request,
+                    mapping.strip_beta_options,
+                    &mapping.strip_specific_beta,
+                );
+
                 // Update system if modified during routing
                 anthropic_request.system = request_for_routing.system.clone();
+
+                if passthrough_token.is_some() {
+                    info!("🔑 Passthrough auth active: original_model={}, target_provider={}", original_model, mapping.provider);
+                }
 
                 // Check if streaming is requested
                 let is_streaming = anthropic_request.stream == Some(true);
@@ -752,6 +1005,13 @@ async fn handle_messages(
             decision.model_name
         )));
     } else {
+        // Passthrough requires explicit model mappings to enforce provider-type filtering
+        if passthrough_token.is_some() {
+            return Err(AppError::RoutingError(
+                "Passthrough auth requires explicit [[models]] configuration".to_string()
+            ));
+        }
+
         // No model mapping found, try direct provider registry lookup (backward compatibility)
         if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
             info!("📦 Using provider from registry (direct lookup): {}", decision.model_name);
@@ -792,10 +1052,32 @@ async fn handle_messages(
 /// Handle /v1/messages/count_tokens requests
 async fn handle_count_tokens(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request_json): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
     let model = request_json.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
     info!("Received count_tokens request for model: {}", model);
+
+    let passthrough_token = if is_claude_code_cli_request(&headers) {
+        let token = extract_bearer_token(&headers);
+        if token.is_none() && has_bearer_prefix(&headers) {
+            return Err(AppError::AuthError("Invalid Bearer token format".to_string()));
+        }
+        if token.is_none() && !has_bearer_prefix(&headers) {
+            debug!("🔑 CC CLI count_tokens request has no Bearer header — passthrough skipped");
+        }
+        token
+    } else {
+        let ua = headers.get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("<none>");
+        debug!("🔑 Non-CC-CLI count_tokens request (User-Agent: '{}') — passthrough skipped", ua);
+        None
+    };
+
+    if passthrough_token.is_some() {
+        info!("🔑 Passthrough mode detected for count_tokens (caller-provided bearer token)");
+    }
 
     // 1. Parse as CountTokensRequest first
     use crate::models::CountTokensRequest;
@@ -816,6 +1098,8 @@ async fn handle_count_tokens(
         stop_sequences: None,
         stream: None,
         metadata: None,
+        passthrough_auth: passthrough_token.clone(),
+        anthropic_beta_header: None,
     };
     let decision = state
         .router
@@ -835,6 +1119,15 @@ async fn handle_count_tokens(
         let mut sorted_mappings = model_config.mappings.clone();
         sorted_mappings.sort_by_key(|m| m.priority);
 
+        if passthrough_token.is_some() {
+            sorted_mappings.retain(|m| is_anthropic_provider(&state.config.providers, &m.provider));
+            if sorted_mappings.is_empty() {
+                return Err(AppError::RoutingError(
+                    "No anthropic-type provider mappings available for passthrough request".to_string()
+                ));
+            }
+        }
+
         // Try each mapping in priority order
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
@@ -849,9 +1142,10 @@ async fn handle_count_tokens(
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Trust the model mapping configuration - no need to validate
 
-                // Update model to actual model name
+                // Update model to actual model name and include passthrough auth if present
                 let mut count_request_for_provider = count_request.clone();
                 count_request_for_provider.model = mapping.actual_model.clone();
+                count_request_for_provider.passthrough_auth = passthrough_token.clone();
 
                 // Call provider's count_tokens
                 match provider.count_tokens(count_request_for_provider).await {
@@ -881,9 +1175,10 @@ async fn handle_count_tokens(
         if let Ok(provider) = state.provider_registry.get_provider_for_model(&decision.model_name) {
             info!("📦 Using provider from registry (direct lookup) for token counting: {}", decision.model_name);
 
-            // Update model to routed model
+            // Update model to routed model and include passthrough auth if present
             let mut count_request_for_provider = count_request.clone();
             count_request_for_provider.model = decision.model_name.clone();
+            count_request_for_provider.passthrough_auth = passthrough_token.clone();
 
             // Call provider's count_tokens
             let response = provider.count_tokens(count_request_for_provider)
@@ -908,6 +1203,7 @@ pub enum AppError {
     RoutingError(String),
     ParseError(String),
     ProviderError(String),
+    AuthError(String),
 }
 
 impl IntoResponse for AppError {
@@ -916,6 +1212,7 @@ impl IntoResponse for AppError {
             AppError::RoutingError(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::ParseError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AppError::ProviderError(msg) => (StatusCode::BAD_GATEWAY, msg),
+            AppError::AuthError(msg) => (StatusCode::UNAUTHORIZED, msg),
         };
 
         let body = Json(serde_json::json!({
@@ -935,8 +1232,320 @@ impl std::fmt::Display for AppError {
             AppError::RoutingError(msg) => write!(f, "Routing error: {}", msg),
             AppError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             AppError::ProviderError(msg) => write!(f, "Provider error: {}", msg),
+            AppError::AuthError(msg) => write!(f, "Auth error: {}", msg),
         }
     }
 }
 
 impl std::error::Error for AppError {}
+
+/// Extract and validate Bearer token from Authorization header
+/// 
+/// Validates:
+/// Returns true if the Authorization header is present and starts with "Bearer ".
+/// Used to detect malformed bearer tokens (present but invalid) vs absent header.
+fn has_bearer_prefix(headers: &HeaderMap) -> bool {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.len() >= 7 && s[..7].eq_ignore_ascii_case("Bearer "))
+        .unwrap_or(false)
+}
+
+/// - Header exists and starts with "Bearer " (case-insensitive)
+/// - Token is non-empty after trimming
+/// - Token contains only valid characters (alphanumeric, dash, underscore, dot, tilde, plus, slash, equals)
+/// - Token length <= 8192 bytes
+///
+/// Returns None if header is missing or invalid.
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            // Case-insensitive Bearer prefix check
+            if s.len() < 7 {
+                return None;
+            }
+            if !s[..7].eq_ignore_ascii_case("Bearer ") {
+                return None;
+            }
+            
+            let token = s[7..].trim();
+            
+            // Reject empty tokens
+            if token.is_empty() {
+                return None;
+            }
+            
+            // Reject tokens exceeding max length (8KB)
+            if token.len() > 8192 {
+                return None;
+            }
+            
+            // Validate token contains only safe characters
+            // Bearer tokens can contain: alphanumeric, - _ . ~ + / =
+            // Reject any control characters or CRLF
+            if !token.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | '+' | '/' | '=')
+            }) {
+                // Log the first rejected character to help diagnose token format issues
+                if let Some(bad_char) = token.chars().find(|&c| {
+                    !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.' | '~' | '+' | '/' | '=')
+                }) {
+                    tracing::warn!("🔑 Bearer token rejected: contains disallowed character U+{:04X} — passthrough will not activate", bad_char as u32);
+                }
+                return None;
+            }
+            
+            Some(token.to_string())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::providers::ProviderConfig;
+    use super::is_anthropic_provider;
+
+    fn make_configs() -> Vec<ProviderConfig> {
+        vec![
+            ProviderConfig {
+                name: "ant1".to_string(),
+                provider_type: "anthropic".to_string(),
+                auth_type: Default::default(),
+                supported_beta_options: vec![],
+                api_key: Some("k".to_string()),
+                oauth_provider: None,
+                project_id: None,
+                location: None,
+                base_url: None,
+                models: vec![],
+                enabled: Some(true),
+            },
+            ProviderConfig {
+                name: "oai1".to_string(),
+                provider_type: "openai".to_string(),
+                auth_type: Default::default(),
+                supported_beta_options: vec![],
+                api_key: Some("k".to_string()),
+                oauth_provider: None,
+                project_id: None,
+                location: None,
+                base_url: None,
+                models: vec![],
+                enabled: Some(true),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_is_anthropic_provider_returns_true_for_anthropic_type() {
+        let configs = make_configs();
+        assert!(is_anthropic_provider(&configs, "ant1"));
+    }
+
+    #[test]
+    fn test_is_anthropic_provider_returns_false_for_openai_type() {
+        let configs = make_configs();
+        assert!(!is_anthropic_provider(&configs, "oai1"));
+    }
+
+    #[test]
+    fn test_is_anthropic_provider_returns_false_for_unknown_name() {
+        let configs = make_configs();
+        assert!(!is_anthropic_provider(&configs, "unknown"));
+    }
+
+    #[test]
+    fn test_passthrough_filter_excludes_non_anthropic_mappings() {
+        use crate::cli::ModelMapping;
+
+        let configs = make_configs(); // ant1=anthropic, oai1=openai
+
+        let mappings = vec![
+            ModelMapping {
+                provider: "ant1".to_string(),
+                actual_model: "claude-opus-4-5".to_string(),
+                priority: 1,
+                strip_beta_options: false,
+                strip_specific_beta: vec![],
+            },
+            ModelMapping {
+                provider: "oai1".to_string(),
+                actual_model: "gpt-4o".to_string(),
+                priority: 2,
+                strip_beta_options: false,
+                strip_specific_beta: vec![],
+            },
+        ];
+
+        let filtered: Vec<_> = mappings
+            .into_iter()
+            .filter(|m| is_anthropic_provider(&configs, &m.provider))
+            .collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider, "ant1");
+    }
+
+    #[test]
+    fn test_passthrough_filter_empty_when_no_anthropic_mappings() {
+        use crate::cli::ModelMapping;
+
+        let configs = make_configs(); // ant1=anthropic, oai1=openai
+
+        let mappings = vec![
+            ModelMapping {
+                provider: "oai1".to_string(),
+                actual_model: "gpt-4o".to_string(),
+                priority: 1,
+                strip_beta_options: false,
+                strip_specific_beta: vec![],
+            },
+        ];
+
+        let filtered: Vec<_> = mappings
+            .into_iter()
+            .filter(|m| is_anthropic_provider(&configs, &m.provider))
+            .collect();
+
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_extract_bearer_token_with_valid_token() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer valid-token-123".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token-123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_case_insensitive() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "bearer valid-token-456".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token-456".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_mixed_case() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "BeArEr valid-token-789".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token-789".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_missing_header() {
+        let headers = axum::http::HeaderMap::new();
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_empty_value() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer ".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_whitespace_only() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer    ".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_trims_whitespace() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer   valid-token   ".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, Some("valid-token".to_string()));
+    }
+
+    #[test]
+    fn test_extract_bearer_token_rejects_invalid_prefix() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic dXNlcjpwYXNz".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_with_special_chars() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert!(token.is_some());
+    }
+
+    // Note: Tests for control characters (newline, null byte, CRLF) are not included
+    // because axum::http::HeaderValue::parse() itself rejects these at the HTTP library level.
+    // Our validator adds defense-in-depth at the application level in case values bypass
+    // the HTTP parser (e.g., from direct function calls with unsanitized input).
+
+    #[test]
+    fn test_extract_bearer_token_rejects_excessive_length() {
+        let mut headers = axum::http::HeaderMap::new();
+        let long_token = "a".repeat(8193);
+        let auth_header = format!("Bearer {}", long_token);
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            auth_header.parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_accepts_max_length() {
+        let mut headers = axum::http::HeaderMap::new();
+        let long_token = "a".repeat(8192);
+        let auth_header = format!("Bearer {}", long_token);
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            auth_header.parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert!(token.is_some());
+    }
+
+    #[test]
+    fn test_extract_bearer_token_rejects_invalid_chars() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer token<script>alert(1)</script>".parse().unwrap(),
+        );
+        let token = super::extract_bearer_token(&headers);
+        assert_eq!(token, None);
+    }
+}

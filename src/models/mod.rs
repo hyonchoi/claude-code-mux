@@ -25,6 +25,12 @@ pub struct AnthropicRequest {
     pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    /// Caller-provided bearer token for passthrough mode. Never serialized.
+    #[serde(skip)]
+    pub passthrough_auth: Option<String>,
+    /// anthropic-beta header value from incoming request. Never serialized.
+    #[serde(skip)]
+    pub anthropic_beta_header: Option<String>,
 }
 
 /// Message in the conversation
@@ -174,6 +180,8 @@ pub struct CountTokensRequest {
     pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passthrough_auth: Option<String>,
 }
 
 /// Response for token counting

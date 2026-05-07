@@ -31,7 +31,7 @@ impl ProviderRegistry {
                 continue;
             }
 
-            // Get API key - required for API key auth, skipped for OAuth
+            // Get API key - required for API key auth, skipped for OAuth and Passthrough
             let api_key = match &config.auth_type {
                 super::AuthType::ApiKey => {
                     config.api_key.clone().ok_or_else(|| {
@@ -44,6 +44,11 @@ impl ProviderRegistry {
                     // OAuth providers will handle authentication differently
                     // For now, use a placeholder - will be replaced with token
                     config.oauth_provider.clone().unwrap_or_else(|| config.name.clone())
+                }
+                super::AuthType::Passthrough => {
+                    // Passthrough auth - token comes from request header
+                    // Use placeholder since actual token is provided at request time
+                    "passthrough".to_string()
                 }
             };
 
@@ -60,32 +65,38 @@ impl ProviderRegistry {
                 )),
 
                 // Anthropic-compatible providers
-                "anthropic" => Box::new(AnthropicCompatibleProvider::new(
+                "anthropic" => Box::new(AnthropicCompatibleProvider::new_with_options_and_auth(
                     config.name.clone(),
                     api_key,
                     config.base_url.clone().unwrap_or_else(|| "https://api.anthropic.com".to_string()),
                     config.models.clone(),
+                    config.auth_type.clone(),
                     config.oauth_provider.clone(),
                     token_store.clone(),
+                    config.supported_beta_options.clone(),
                 )),
-                "z.ai" => Box::new(AnthropicCompatibleProvider::zai(
+                "z.ai" => Box::new(AnthropicCompatibleProvider::zai_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
-                "minimax" => Box::new(AnthropicCompatibleProvider::minimax(
+                "minimax" => Box::new(AnthropicCompatibleProvider::minimax_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
-                "zenmux" => Box::new(AnthropicCompatibleProvider::zenmux(
+                "zenmux" => Box::new(AnthropicCompatibleProvider::zenmux_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
-                "kimi-coding" => Box::new(AnthropicCompatibleProvider::kimi_coding(
+                "kimi-coding" => Box::new(AnthropicCompatibleProvider::kimi_coding_with_auth(
                     api_key,
                     config.models.clone(),
+                    config.auth_type.clone(),
                     token_store.clone(),
                 )),
 
@@ -189,8 +200,21 @@ impl ProviderRegistry {
             // Model mappings are now defined in [[models]] section
             // We only register the provider by name
 
-            // Add provider to registry
-            registry.providers.insert(config.name.clone(), Arc::new(provider));
+            // Add provider to registry with debug logging
+            let provider_name = config.name.clone();
+            let beta_options = &config.supported_beta_options;
+            
+            if !beta_options.is_empty() {
+                tracing::debug!(
+                    "registering provider '{}': supported beta options: {:?}",
+                    provider_name,
+                    beta_options
+                );
+            } else {
+                tracing::debug!("registering provider '{}': no specific beta options configured", provider_name);
+            }
+            
+            registry.providers.insert(provider_name, Arc::new(provider));
         }
 
         Ok(registry)

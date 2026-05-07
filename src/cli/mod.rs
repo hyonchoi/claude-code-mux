@@ -112,6 +112,12 @@ pub struct ModelMapping {
     pub provider: String,
     /// Actual model name to use with the provider
     pub actual_model: String,
+    /// Whether to strip all beta options from the anthropic-beta header
+    #[serde(default)]
+    pub strip_beta_options: bool,
+    /// List of specific beta options to strip (overrides strip_beta_options if provided)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strip_specific_beta: Vec<String>,
 }
 
 impl ModelConfig {}

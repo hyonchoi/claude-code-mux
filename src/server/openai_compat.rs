@@ -212,6 +212,8 @@ pub fn transform_openai_to_anthropic(openai_req: OpenAIRequest) -> Result<Anthro
         metadata: None,
         system: system_prompt,
         tools: None, // TODO: Transform tools if needed
+        passthrough_auth: None,
+        anthropic_beta_header: None,
     })
 }
 

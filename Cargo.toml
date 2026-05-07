@@ -8,6 +8,10 @@ repository = "https://github.com/9j/claude-code-mux"
 keywords = ["claude", "code", "router", "llm", "ai"]
 categories = ["command-line-utilities", "web-programming"]
 
+[lib]
+name = "claude_code_mux"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ccm"
 path = "src/main.rs"
@@ -76,6 +80,7 @@ criterion = "0.5"          # Benchmarking
 
 # Property Testing
 proptest = "1"
+tempfile = "3.27.0"
 
 [[bench]]
 name = "routing"

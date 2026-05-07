@@ -56,13 +56,15 @@ pub trait AnthropicProvider: Send + Sync {
 }
 
 /// Authentication type for providers
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthType {
     /// API key authentication
     ApiKey,
     /// OAuth 2.0 authentication
     OAuth,
+    /// Passthrough authentication (token from request header)
+    Passthrough,
 }
 
 impl Default for AuthType {
@@ -80,6 +82,10 @@ pub struct ProviderConfig {
     /// Authentication type (default: api_key)
     #[serde(default)]
     pub auth_type: AuthType,
+
+    /// List of supported anthropic-beta options
+    #[serde(default)]
+    pub supported_beta_options: Vec<String>,
 
     /// API key (required for auth_type = "apikey")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +119,7 @@ impl ProviderConfig {
         match self.auth_type {
             AuthType::ApiKey => self.api_key.clone(),
             AuthType::OAuth => self.oauth_provider.clone(),
+            AuthType::Passthrough => None,
         }
     }
 }

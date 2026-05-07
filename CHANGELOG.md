@@ -5,6 +5,27 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-05-05
+
+### Added
+- Claude OAuth Passthrough Relay — callers can pass their own bearer tokens instead of using internal API keys
+- Bearer token detection and validation in incoming requests
+- Provider-type filtering for passthrough requests (anthropic-type only for security)
+- `passthrough_auth` field to `AnthropicRequest` model
+- `override_auth` parameter to provider `get_auth_header()` methods
+- Bearer token validation to prevent header injection attacks
+- Comprehensive passthrough relay specification and implementation plan
+- Integration tests for passthrough provider-type filtering
+- Library exports to enable example builds
+
+### Changed
+- Handler auth flow now detects and preserves caller-provided bearer tokens
+- Fallback behavior restricted for passthrough requests (anthropic-type providers only)
+- Enhanced security validation on incoming Authorization headers
+
+### Fixed
+- Added missing tempfile dev-dependency for token_store tests
+
 ## [0.6.0] - 2025-11-19
 
 ### Added
@@ -122,6 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TOML-based configuration
 - Token counting endpoint (`/v1/messages/count_tokens`)
 
+[0.7.0]: https://github.com/9j/claude-code-mux/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/9j/claude-code-mux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/9j/claude-code-mux/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/9j/claude-code-mux/compare/v0.4.2...v0.4.3
