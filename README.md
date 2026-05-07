@@ -92,10 +92,11 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 
 ## Supported Providers
 
-**18+ AI providers with automatic format translation, streaming, and failover:**
+**19+ AI providers with automatic format translation, streaming, and failover:**
 
 - **Anthropic-compatible**: Anthropic (API Key/OAuth), ZenMux, z.ai, Minimax, Kimi
 - **OpenAI-compatible**: OpenAI, OpenRouter, Groq, Together, Fireworks, Deepinfra, Cerebras, Moonshot, Nebius, NovitaAI, Baseten
+- **GPU/Edge**: NVIDIA NIM (local or cloud)
 - **Google AI**: Gemini (OAuth/API Key), Vertex AI (GCP ADC)
 
 <details>
@@ -122,6 +123,9 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 - **Nebius** - AI inference platform
 - **NovitaAI** - GPU cloud platform
 - **Baseten** - ML deployment platform
+
+### GPU/Edge Inference
+- **NVIDIA NIM** - Run LLMs locally via NVIDIA NIM containers or use NVIDIA's cloud services (Llama, Mistral, Claude, etc.)
 
 ### Google AI
 - **Gemini** - Google AI Studio/Code Assist API (supports both OAuth and API Key)
@@ -558,6 +562,71 @@ Result: glm-4.6 (original model name, routed through model mappings)
 - Think: `glm-4.6` (with OpenRouter fallback)
 - Background: `glm-4.5-air`
 - WebSearch: `glm-4.6`
+
+### Local GPU Inference with NVIDIA NIM
+
+**Use Case**: Run open-source models locally on NVIDIA GPU, with cloud providers as backup.
+
+**Providers**:
+- NVIDIA NIM (local, free)
+- Anthropic (fallback for when NIM is down)
+
+**Setup**:
+```bash
+# Start NVIDIA NIM container (example with Llama 3.1 8B)
+docker run -it --rm --gpus all -p 8000:8000 \
+  nvcr.io/nim/meta-llama-3.1-8b-instruct:latest
+```
+
+**Configuration** (see `config/templates/nvidia-nim.toml` for full template):
+```toml
+[[providers]]
+name = "nvidia-nim-local"
+provider_type = "anthropic"
+api_key = ""  # Empty for local deployment
+base_url = "http://localhost:8000/v1"
+models = ["meta-llama-3.1-8b-instruct"]
+
+[[providers]]
+name = "anthropic"
+provider_type = "anthropic"
+api_key = "your-anthropic-api-key"
+models = ["claude-opus-4-1"]
+
+[[models]]
+name = "llama-8b"
+
+[[models.mappings]]
+actual_model = "meta-llama-3.1-8b-instruct"
+priority = 1
+provider = "nvidia-nim-local"
+
+[[models.mappings]]
+actual_model = "claude-opus-4-1"
+priority = 2
+provider = "anthropic"
+
+[router]
+default = "llama-8b"  # Prefer local NIM when available
+background = "llama-8b"
+```
+
+**Benefits**:
+- ✅ Zero API costs (run locally on your GPU)
+- ✅ Private inference (data stays on your machine)
+- ✅ Sub-second response times (local)
+- ✅ Automatic fallback to Anthropic if NIM is down
+- ✅ Works with Llama, Mistral, or any model supported by NIM
+
+**Available Models** (depending on your NIM deployment):
+- `meta-llama-3.1-405b-instruct` (8-bit, 405B params)
+- `meta-llama-3.1-70b-instruct`
+- `meta-llama-3.1-8b-instruct`
+- `mistral-large`
+- `mistral-7b-instruct-v0.3`
+- And more (query `/v1/models` on your NIM instance)
+
+For full documentation, see `config/templates/nvidia-nim.toml` in the repository.
 
 ## Advanced Features
 
