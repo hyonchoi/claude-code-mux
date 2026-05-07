@@ -3,10 +3,14 @@ use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse};
 use crate::auth::{TokenStore, OAuthClient, OAuthConfig};
 use crate::server::{parse_anthropic_beta, validate_anthropic_beta};
 use async_trait::async_trait;
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use reqwest::Client;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::num::NonZeroU32;
 use futures::stream::Stream;
 use bytes::Bytes;
+use tokio::time::{Duration, Instant, timeout};
 use tracing::{debug, warn};
 
 /// Generic Anthropic-compatible provider
@@ -29,8 +33,12 @@ pub struct AnthropicCompatibleProvider {
     /// Supported anthropic-beta options for this provider
     supported_beta_options: Vec<String>,
     /// Rate limit in requests per minute (e.g., 40 for NVIDIA NIM)
-    /// If set, the provider should enforce this limit to prevent 429 errors
+    /// If set, outbound message and stream requests are throttled at this budget.
     rate_limit_rpm: Option<u32>,
+    /// Maximum wait time before failing over to the next mapping.
+    rate_limit_max_wait_ms: Option<u64>,
+    /// Token-bucket limiter for this provider instance.
+    rate_limiter: Option<Arc<DefaultDirectRateLimiter>>,
 }
 
 impl AnthropicCompatibleProvider {
@@ -98,6 +106,8 @@ impl AnthropicCompatibleProvider {
             token_store,
             supported_beta_options,
             rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+            rate_limiter: None,
         }
     }
 
@@ -193,13 +203,84 @@ impl AnthropicCompatibleProvider {
             token_store,
             supported_beta_options,
             rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+            rate_limiter: None,
         }
     }
 
     /// Set the rate limit in requests per minute (useful for NVIDIA NIM: 40 rpm)
     pub fn with_rate_limit(mut self, rate_limit_rpm: Option<u32>) -> Self {
-        self.rate_limit_rpm = rate_limit_rpm;
+        self = self.with_rate_limit_config(rate_limit_rpm, None);
         self
+    }
+
+    /// Set rate-limit parameters for this provider instance.
+    pub fn with_rate_limit_config(
+        mut self,
+        rate_limit_rpm: Option<u32>,
+        rate_limit_max_wait_ms: Option<u64>,
+    ) -> Self {
+        self.rate_limit_rpm = rate_limit_rpm;
+        self.rate_limit_max_wait_ms = match rate_limit_rpm {
+            Some(_) => Some(rate_limit_max_wait_ms.unwrap_or(2_000)),
+            None => None,
+        };
+        self.rate_limiter = rate_limit_rpm
+            .and_then(NonZeroU32::new)
+            .map(|rpm| Arc::new(RateLimiter::direct(Quota::per_minute(rpm))));
+        self
+    }
+
+    async fn await_rate_limit_permit(&self) -> Result<(), ProviderError> {
+        let Some(rpm) = self.rate_limit_rpm else {
+            return Ok(());
+        };
+
+        if rpm == 0 {
+            return Err(ProviderError::ConfigError(format!(
+                "Provider '{}' has invalid rate_limit_rpm=0",
+                self.name
+            )));
+        }
+
+        let max_wait_ms = self.rate_limit_max_wait_ms.unwrap_or(2_000);
+        let limiter = self.rate_limiter.as_ref().ok_or_else(|| {
+            ProviderError::ConfigError(format!(
+                "Provider '{}' rate limiter not initialized",
+                self.name
+            ))
+        })?;
+
+        let started = Instant::now();
+        match timeout(Duration::from_millis(max_wait_ms), limiter.until_ready()).await {
+            Ok(()) => {
+                let waited = started.elapsed().as_millis() as u64;
+                if waited > 0 {
+                    debug!(
+                        provider = %self.name,
+                        rpm = rpm,
+                        waited_ms = waited,
+                        max_wait_ms = max_wait_ms,
+                        "Rate limiter delayed provider request",
+                    );
+                }
+                Ok(())
+            }
+            Err(_) => {
+                warn!(
+                    provider = %self.name,
+                    rpm = rpm,
+                    waited_ms = max_wait_ms,
+                    max_wait_ms = max_wait_ms,
+                    "Rate limiter wait budget exceeded; allowing fallback",
+                );
+                Err(ProviderError::RateLimitTimeout {
+                    provider: self.name.clone(),
+                    rpm,
+                    max_wait_ms,
+                })
+            }
+        }
     }
 
     /// Get authentication header value. override_auth takes highest priority.
@@ -406,6 +487,8 @@ impl AnthropicCompatibleProvider {
 #[async_trait]
 impl AnthropicProvider for AnthropicCompatibleProvider {
     async fn send_message(&self, request: AnthropicRequest) -> Result<ProviderResponse, ProviderError> {
+        self.await_rate_limit_permit().await?;
+
         let url = format!("{}/v1/messages", self.base_url);
 
         // Get authentication header value (API key or OAuth token)
@@ -610,6 +693,8 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError> {
         use futures::stream::TryStreamExt;
 
+        self.await_rate_limit_permit().await?;
+
         let url = format!("{}/v1/messages", self.base_url);
 
         // Get authentication header value
@@ -720,6 +805,9 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{Message, MessageContent};
+    use std::time::Duration;
+    use tokio::time::sleep;
 
     fn make_provider() -> AnthropicCompatibleProvider {
         AnthropicCompatibleProvider::new(
@@ -759,6 +847,7 @@ mod tests {
         
         // Verify provider is created with rate limit
         assert_eq!(provider.rate_limit_rpm, Some(40));
+        assert_eq!(provider.rate_limit_max_wait_ms, Some(2_000));
     }
 
     #[test]
@@ -790,5 +879,61 @@ mod tests {
         
         let provider_with_limit = provider.with_rate_limit(Some(50));
         assert_eq!(provider_with_limit.rate_limit_rpm, Some(50));
+        assert_eq!(provider_with_limit.rate_limit_max_wait_ms, Some(2_000));
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_timeout_returns_fallback_error() {
+        let provider = AnthropicCompatibleProvider::new(
+            "nvidia-nim".to_string(),
+            "key".to_string(),
+            "https://example.com".to_string(),
+            vec![],
+            None,
+            None,
+        )
+        .with_rate_limit_config(Some(1), Some(1));
+
+        provider.await_rate_limit_permit().await.unwrap();
+        let err = provider.await_rate_limit_permit().await.unwrap_err();
+
+        match err {
+            ProviderError::RateLimitTimeout { provider, rpm, max_wait_ms } => {
+                assert_eq!(provider, "nvidia-nim");
+                assert_eq!(rpm, 1);
+                assert_eq!(max_wait_ms, 1);
+            }
+            other => panic!("expected rate-limit timeout, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_count_tokens_not_throttled_by_rate_limit() {
+        let provider = AnthropicCompatibleProvider::new(
+            "nvidia-nim".to_string(),
+            "key".to_string(),
+            "https://example.com".to_string(),
+            vec![],
+            None,
+            None,
+        )
+        .with_rate_limit_config(Some(1), Some(1));
+
+        provider.await_rate_limit_permit().await.unwrap();
+        sleep(Duration::from_millis(2)).await;
+
+        let request = CountTokensRequest {
+            model: "meta-llama-3.1-8b-instruct".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+        };
+
+        let response = provider.count_tokens(request).await.unwrap();
+        assert!(response.input_tokens > 0);
     }
 }
