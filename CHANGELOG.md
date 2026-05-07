@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive passthrough relay specification and implementation plan
 - Integration tests for passthrough provider-type filtering
 - Library exports to enable example builds
+- **NVIDIA NIM Provider Support** — cloud API access to Meta Llama, Mistral, and other open-source models
+- NVIDIA NIM rate limiting configuration (40 requests/minute) with provider-level metadata tracking
+- NVIDIA NIM provider option in admin UI for easy setup
+- Rate limit field (`rate_limit_rpm`) to provider configuration for rate-limited providers
 
 ### Changed
 - Handler auth flow now detects and preserves caller-provided bearer tokens

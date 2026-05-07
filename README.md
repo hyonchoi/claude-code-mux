@@ -92,7 +92,7 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 
 ## Supported Providers
 
-**19+ AI providers with automatic format translation, streaming, and failover:**
+**20+ AI providers with automatic format translation, streaming, and failover:**
 
 - **Anthropic-compatible**: Anthropic (API Key/OAuth), ZenMux, z.ai, Minimax, Kimi
 - **OpenAI-compatible**: OpenAI, OpenRouter, Groq, Together, Fireworks, Deepinfra, Cerebras, Moonshot, Nebius, NovitaAI, Baseten
