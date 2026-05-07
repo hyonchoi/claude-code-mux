@@ -586,6 +586,8 @@ api_key = "your-nvidia-nim-api-key-here"
 # NVIDIA's cloud endpoint
 base_url = "https://integrate.api.nvidia.com/v1"
 enabled = true
+# Rate limit: 40 requests per minute (automatic enforcement)
+rate_limit_rpm = 40
 models = ["meta-llama-3.1-405b-instruct", "meta-llama-3.1-70b-instruct"]
 
 [[providers]]
@@ -611,6 +613,11 @@ provider = "anthropic"
 default = "llama-405b"  # Prefer Llama 405B via NVIDIA NIM
 background = "llama-405b"
 ```
+
+**Rate Limiting**:
+- NVIDIA NIM Cloud API enforces a rate limit of **40 requests per minute**
+- The router automatically respects this limit when configured with `rate_limit_rpm = 40`
+- If rate limits are exceeded, requests are queued or routed to fallback providers
 
 **Benefits**:
 - ✅ Free tier with generous rate limits (get API key at build.nvidia.com)

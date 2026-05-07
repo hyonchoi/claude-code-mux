@@ -74,7 +74,7 @@ impl ProviderRegistry {
                     config.oauth_provider.clone(),
                     token_store.clone(),
                     config.supported_beta_options.clone(),
-                )),
+                ).with_rate_limit(config.rate_limit_rpm)),
                 "z.ai" => Box::new(AnthropicCompatibleProvider::zai_with_auth(
                     api_key,
                     config.models.clone(),

@@ -1321,6 +1321,7 @@ mod tests {
                 base_url: None,
                 models: vec![],
                 enabled: Some(true),
+                rate_limit_rpm: None,
             },
             ProviderConfig {
                 name: "oai1".to_string(),
@@ -1334,6 +1335,7 @@ mod tests {
                 base_url: None,
                 models: vec![],
                 enabled: Some(true),
+                rate_limit_rpm: None,
             },
         ]
     }

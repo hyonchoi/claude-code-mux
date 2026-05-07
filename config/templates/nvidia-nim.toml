@@ -14,6 +14,7 @@
 # OPTION 1: NVIDIA NIM Cloud API (recommended for getting started)
 # ============================================================================
 # Free tier available with generous rate limits.
+# Rate limit: 40 requests per minute
 # Get your API key at: https://build.nvidia.com/
 #
 # Then use this configuration:
@@ -26,6 +27,9 @@ api_key = "your-nvidia-nim-api-key-here"
 # NVIDIA's cloud endpoint for NIM
 base_url = "https://integrate.api.nvidia.com/v1"
 enabled = true
+# NVIDIA NIM rate limit: 40 requests per minute
+# The router automatically enforces this limit to prevent 429 errors
+rate_limit_rpm = 40
 # Popular NVIDIA NIM models (free tier available):
 # - meta-llama-3.1-405b-instruct (405B parameter model)
 # - meta-llama-3.1-70b-instruct (70B parameter model)

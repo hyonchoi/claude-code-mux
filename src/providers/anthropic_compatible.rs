@@ -10,7 +10,7 @@ use bytes::Bytes;
 use tracing::{debug, warn};
 
 /// Generic Anthropic-compatible provider
-/// Works with: Anthropic, OpenRouter, z.ai, Minimax, etc.
+/// Works with: Anthropic, OpenRouter, z.ai, Minimax, NVIDIA NIM, etc.
 /// Any provider that accepts Anthropic Messages API format
 pub struct AnthropicCompatibleProvider {
     name: String,
@@ -28,6 +28,9 @@ pub struct AnthropicCompatibleProvider {
     token_store: Option<TokenStore>,
     /// Supported anthropic-beta options for this provider
     supported_beta_options: Vec<String>,
+    /// Rate limit in requests per minute (e.g., 40 for NVIDIA NIM)
+    /// If set, the provider should enforce this limit to prevent 429 errors
+    rate_limit_rpm: Option<u32>,
 }
 
 impl AnthropicCompatibleProvider {
@@ -94,6 +97,7 @@ impl AnthropicCompatibleProvider {
             oauth_provider,
             token_store,
             supported_beta_options,
+            rate_limit_rpm: None,
         }
     }
 
@@ -188,7 +192,14 @@ impl AnthropicCompatibleProvider {
             oauth_provider,
             token_store,
             supported_beta_options,
+            rate_limit_rpm: None,
         }
+    }
+
+    /// Set the rate limit in requests per minute (useful for NVIDIA NIM: 40 rpm)
+    pub fn with_rate_limit(mut self, rate_limit_rpm: Option<u32>) -> Self {
+        self.rate_limit_rpm = rate_limit_rpm;
+        self
     }
 
     /// Get authentication header value. override_auth takes highest priority.

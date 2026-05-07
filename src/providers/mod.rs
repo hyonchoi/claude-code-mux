@@ -107,6 +107,11 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     pub models: Vec<String>,
     pub enabled: Option<bool>,
+
+    /// Rate limit in requests per minute (e.g., 40 for NVIDIA NIM)
+    /// If set, the router will enforce this limit to prevent 429 errors
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_rpm: Option<u32>,
 }
 
 impl ProviderConfig {
