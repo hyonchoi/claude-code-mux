@@ -26,6 +26,13 @@ impl ProviderRegistry {
         let mut registry = Self::new();
 
         for config in configs {
+            if config.rate_limit_rpm == Some(0) {
+                return Err(ProviderError::ConfigError(format!(
+                    "Provider '{}' has invalid rate_limit_rpm=0 (use null to disable or a value > 0)",
+                    config.name
+                )));
+            }
+
             // Skip disabled providers
             if !config.is_enabled() {
                 continue;
@@ -74,7 +81,7 @@ impl ProviderRegistry {
                     config.oauth_provider.clone(),
                     token_store.clone(),
                     config.supported_beta_options.clone(),
-                ).with_rate_limit(config.rate_limit_rpm)),
+                ).with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms)),
                 "z.ai" => Box::new(AnthropicCompatibleProvider::zai_with_auth(
                     api_key,
                     config.models.clone(),
@@ -294,6 +301,7 @@ mod tests {
             models: vec!["meta-llama-3.1-405b-instruct".to_string()],
             enabled: Some(true),
             rate_limit_rpm: Some(40),
+            rate_limit_max_wait_ms: Some(2000),
         };
         
         // Verify provider configuration has rate limit set
@@ -318,6 +326,7 @@ mod tests {
             models: vec!["meta-llama-3.1-405b-instruct".to_string()],
             enabled: Some(true),
             rate_limit_rpm: Some(40),
+            rate_limit_max_wait_ms: Some(2000),
         };
         
         let registry = ProviderRegistry::from_configs(&[config], None);
@@ -343,6 +352,7 @@ mod tests {
             models: vec![],
             enabled: Some(true),
             rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
         };
         
         // Verify providers without rate_limit_rpm work fine
@@ -350,5 +360,34 @@ mod tests {
         
         let registry = ProviderRegistry::from_configs(&[config], None);
         assert!(registry.is_ok());
+    }
+
+    #[test]
+    fn test_rate_limit_rpm_zero_is_rejected() {
+        let config = ProviderConfig {
+            name: "nvidia-nim".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            models: vec!["meta-llama-3.1-405b-instruct".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(0),
+            rate_limit_max_wait_ms: Some(1000),
+        };
+
+        let err = ProviderRegistry::from_configs(&[config], None)
+            .err()
+            .expect("expected config error for rate_limit_rpm=0");
+        match err {
+            ProviderError::ConfigError(msg) => {
+                assert!(msg.contains("rate_limit_rpm=0"));
+            }
+            other => panic!("expected config error, got: {other:?}"),
+        }
     }
 }
