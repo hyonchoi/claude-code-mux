@@ -92,10 +92,11 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 
 ## Supported Providers
 
-**18+ AI providers with automatic format translation, streaming, and failover:**
+**20+ AI providers with automatic format translation, streaming, and failover:**
 
 - **Anthropic-compatible**: Anthropic (API Key/OAuth), ZenMux, z.ai, Minimax, Kimi
 - **OpenAI-compatible**: OpenAI, OpenRouter, Groq, Together, Fireworks, Deepinfra, Cerebras, Moonshot, Nebius, NovitaAI, Baseten
+- **GPU/Edge**: NVIDIA NIM (cloud API or self-hosted)
 - **Google AI**: Gemini (OAuth/API Key), Vertex AI (GCP ADC)
 
 <details>
@@ -122,6 +123,9 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 - **Nebius** - AI inference platform
 - **NovitaAI** - GPU cloud platform
 - **Baseten** - ML deployment platform
+
+### GPU/Edge Inference
+- **NVIDIA NIM** - Cloud API access to Llama, Mistral, and other LLMs (free tier at build.nvidia.com) with support for self-hosted deployment
 
 ### Google AI
 - **Gemini** - Google AI Studio/Code Assist API (supports both OAuth and API Key)
@@ -558,6 +562,83 @@ Result: glm-4.6 (original model name, routed through model mappings)
 - Think: `glm-4.6` (with OpenRouter fallback)
 - Background: `glm-4.5-air`
 - WebSearch: `glm-4.6`
+
+### NVIDIA NIM Cloud API
+
+**Use Case**: Access state-of-the-art open-source models (Llama, Mistral) via NVIDIA's OpenAI-compatible cloud API with fallback to other providers.
+
+**Providers**:
+- NVIDIA NIM (cloud API, free tier available, OpenAI-compatible)
+- Anthropic (fallback for when NIM is unavailable)
+
+**Setup**:
+1. Get your free API key at [https://build.nvidia.com/](https://build.nvidia.com/)
+2. Configure the provider with your API key
+3. Route requests to NVIDIA NIM
+
+**Configuration** (see `config/templates/nvidia-nim.toml` for full template):
+```toml
+[[providers]]
+name = "nvidia-nim"
+provider_type = "nvidia-nim"
+# Get your free API key from https://build.nvidia.com/
+api_key = "your-nvidia-nim-api-key-here"
+# NVIDIA's cloud endpoint
+base_url = "https://integrate.api.nvidia.com/v1"
+enabled = true
+# Rate limit: 40 requests per minute (provider-level enforcement)
+rate_limit_rpm = 40
+# Optional: max wait before fallback to next mapping (default: 2000ms)
+rate_limit_max_wait_ms = 2000
+models = ["meta-llama-3.1-405b-instruct", "meta-llama-3.1-70b-instruct"]
+
+[[providers]]
+name = "anthropic"
+provider_type = "anthropic"
+api_key = "your-anthropic-api-key"
+models = ["claude-opus-4-1"]
+
+[[models]]
+name = "llama-405b"
+
+[[models.mappings]]
+actual_model = "meta-llama-3.1-405b-instruct"
+priority = 1
+provider = "nvidia-nim"
+
+[[models.mappings]]
+actual_model = "claude-opus-4-1"
+priority = 2
+provider = "anthropic"
+
+[router]
+default = "llama-405b"  # Prefer Llama 405B via NVIDIA NIM
+background = "llama-405b"
+```
+
+**Rate Limiting**:
+- NVIDIA NIM Cloud API enforces a rate limit of **40 requests per minute**
+- The NVIDIA NIM provider enforces this budget when configured with `rate_limit_rpm = 40`
+- Requests wait up to `rate_limit_max_wait_ms` (default: 2000ms), then fallback to the next mapping
+
+**Benefits**:
+- ✅ Free tier with generous rate limits (get API key at build.nvidia.com)
+- ✅ Access to powerful models (Llama 405B, 70B, Mistral Large, etc.)
+- ✅ Pay-as-you-go pricing for production ($0.60 input / $2.00 output per 1M tokens for Llama 405B)
+- ✅ Automatic fallback to Anthropic if NVIDIA is unavailable
+- ✅ No GPU hardware required (cloud hosted)
+
+**Available Models** (check [https://build.nvidia.com/explore/discover](https://build.nvidia.com/explore/discover) for complete list):
+- `meta-llama-3.1-405b-instruct` (405B, most capable)
+- `meta-llama-3.1-70b-instruct` (70B, good balance)
+- `meta-llama-3.1-8b-instruct` (8B, fast & efficient)
+- `mistral-large` (powerful general purpose)
+- `mistral-7b-instruct-v0.3` (lightweight)
+- `qwen-2.5-72b-instruct` (advanced reasoning)
+- `mistral-nemo` (new high-performance model)
+- And more multi-modal and specialized models
+
+For full documentation including self-hosted and local options, see `config/templates/nvidia-nim.toml` in the repository.
 
 ## Advanced Features
 

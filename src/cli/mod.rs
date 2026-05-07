@@ -236,7 +236,7 @@ default = "placeholder-model"
 # Example:
 # [[providers]]
 # name = "my-provider"
-# provider_type = "anthropic"  # or "openai", "openrouter", etc.
+# provider_type = "anthropic"  # or "openai", "openrouter", "nvidia-nim", etc.
 # auth_type = "api_key"        # or "oauth"
 # api_key = "your-api-key-here"
 # enabled = true

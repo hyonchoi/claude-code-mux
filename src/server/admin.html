@@ -663,6 +663,24 @@
                                             </div>
                                         </div>
                                     </label>
+                                    <label class="cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="provider_type"
+                                            value="nvidia-nim"
+                                            class="peer sr-only"
+                                        />
+                                        <div
+                                            class="p-6 border-2 border-gray-200 rounded-xl peer-checked:border-blue-600 peer-checked:bg-blue-50 hover:border-gray-300 transition-all"
+                                        >
+                                            <div class="text-xl font-bold mb-1">
+                                                NVIDIA NIM
+                                            </div>
+                                            <div class="text-sm text-gray-600">
+                                                Cloud API or self-hosted LLMs
+                                            </div>
+                                        </div>
+                                    </label>
 
                                     <!-- OpenAI-compatible -->
                                     <label class="cursor-pointer">
@@ -1332,19 +1350,59 @@
                                 <p class="text-gray-600 mb-8">
                                     Optional - only if needed
                                 </p>
-                                <div>
+                                <div class="space-y-6">
                                     <label class="label"
                                         >Custom Endpoint (Optional)</label
                                     >
                                     <input
                                         type="url"
+                                        id="base-url-input"
                                         name="base_url"
                                         class="input-field font-mono"
                                         placeholder="https://api.anthropic.com"
                                     />
-                                    <div class="helper-text">
+                                    <div class="helper-text" id="base-url-helper-text">
                                         Only enter if you want to use a
                                         different URL than the default endpoint
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="label"
+                                        >Rate Limit RPM (Optional)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="rate-limit-rpm-input"
+                                        name="rate_limit_rpm"
+                                        class="input-field font-mono"
+                                        placeholder="40"
+                                        min="1"
+                                        step="1"
+                                    />
+                                    <div class="helper-text">
+                                        Leave blank to disable rate limiting for
+                                        this provider.
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="label"
+                                        >Rate Limit Max Wait (Optional)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="rate-limit-max-wait-input"
+                                        name="rate_limit_max_wait_ms"
+                                        class="input-field font-mono"
+                                        placeholder="2000"
+                                        min="1"
+                                        step="1"
+                                    />
+                                    <div class="helper-text">
+                                        Milliseconds to wait for a permit before
+                                        allowing fallback. Only applies when
+                                        RPM is set.
                                     </div>
                                 </div>
                             </div>
@@ -2510,6 +2568,23 @@
                         }
                     }
 
+                    const rateLimitRpmField =
+                        form.querySelector('[name="rate_limit_rpm"]');
+                    if (rateLimitRpmField && provider.rate_limit_rpm != null) {
+                        rateLimitRpmField.value = provider.rate_limit_rpm;
+                    }
+
+                    const rateLimitMaxWaitField = form.querySelector(
+                        '[name="rate_limit_max_wait_ms"]',
+                    );
+                    if (
+                        rateLimitMaxWaitField &&
+                        provider.rate_limit_max_wait_ms != null
+                    ) {
+                        rateLimitMaxWaitField.value =
+                            provider.rate_limit_max_wait_ms;
+                    }
+
                     // Update UI labels
                     document.querySelector(
                         "#providers-add-view h1",
@@ -3425,6 +3500,12 @@
                         formData.get("auth_type")?.trim() || "apikey";
                     const apiKey = formData.get("api_key")?.trim();
                     const baseUrl = formData.get("base_url")?.trim();
+                    const rateLimitRpmRaw = formData
+                        .get("rate_limit_rpm")
+                        ?.trim();
+                    const rateLimitMaxWaitRaw = formData
+                        .get("rate_limit_max_wait_ms")
+                        ?.trim();
 
                     // Validation
                     if (!providerName) {
@@ -3482,6 +3563,41 @@
 
                     // Passthrough auth requires no additional validation - token comes from request
 
+                    let rateLimitRpm = null;
+                    if (rateLimitRpmRaw) {
+                        rateLimitRpm = Number(rateLimitRpmRaw);
+                        if (
+                            !Number.isInteger(rateLimitRpm) ||
+                            rateLimitRpm <= 0
+                        ) {
+                            notifyError(
+                                "Rate Limit RPM must be a positive whole number.",
+                            );
+                            return;
+                        }
+                    }
+
+                    let rateLimitMaxWaitMs = null;
+                    if (rateLimitMaxWaitRaw) {
+                        rateLimitMaxWaitMs = Number(rateLimitMaxWaitRaw);
+                        if (
+                            !Number.isInteger(rateLimitMaxWaitMs) ||
+                            rateLimitMaxWaitMs <= 0
+                        ) {
+                            notifyError(
+                                "Rate Limit Max Wait must be a positive whole number.",
+                            );
+                            return;
+                        }
+
+                        if (!rateLimitRpm) {
+                            notifyError(
+                                "Please set Rate Limit RPM before setting Max Wait.",
+                            );
+                            return;
+                        }
+                    }
+
                     const providerData = {
                         name: providerName,
                         provider_type: providerType,
@@ -3515,6 +3631,14 @@
 
                         if (baseUrl) {
                             providerData.base_url = baseUrl;
+                        }
+                    }
+
+                    if (rateLimitRpm) {
+                        providerData.rate_limit_rpm = rateLimitRpm;
+                        if (rateLimitMaxWaitMs) {
+                            providerData.rate_limit_max_wait_ms =
+                                rateLimitMaxWaitMs;
                         }
                     }
 
@@ -3963,6 +4087,8 @@
                     document.getElementById("auth-type-selector");
                 const authCardTitle =
                     document.getElementById("auth-card-title");
+                const baseUrlInput = document.getElementById("base-url-input");
+                const baseUrlHelper = document.getElementById("base-url-helper-text");
 
                 // Show/hide Vertex AI config based on provider type
                 const vertexProjectIdField = document.getElementById("vertex-project-id");
@@ -3986,6 +4112,18 @@
                     // Remove required attributes when not Vertex AI
                     if (vertexProjectIdField) vertexProjectIdField.removeAttribute("required");
                     if (vertexLocationField) vertexLocationField.removeAttribute("required");
+                }
+
+                if (baseUrlInput && baseUrlHelper) {
+                    if (providerType === "nvidia-nim") {
+                        baseUrlInput.placeholder = "https://integrate.api.nvidia.com/v1";
+                        baseUrlHelper.textContent =
+                            "Defaults to NVIDIA NIM Cloud API. Override only if you use a different endpoint.";
+                    } else {
+                        baseUrlInput.placeholder = "https://api.anthropic.com";
+                        baseUrlHelper.textContent =
+                            "Only enter if you want to use a different URL than the default endpoint";
+                    }
                 }
 
                 if (providerType === "openai") {

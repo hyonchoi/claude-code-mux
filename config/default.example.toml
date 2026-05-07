@@ -54,6 +54,20 @@ models = []
 name = "kimi-for-coding"
 provider_type = "anthropic"
 
+# NVIDIA NIM Provider - OpenAI-compatible Cloud API
+# Get your API key from: https://build.nvidia.com/
+[[providers]]
+api_key = "your-nvidia-nim-api-key-here"
+base_url = "https://integrate.api.nvidia.com/v1"
+enabled = false
+# List the models available in your NIM instance
+# Common NVIDIA NIM models: meta-llama-3.1-405b-instruct, meta-llama-3.1-70b-instruct, etc.
+models = []
+name = "nvidia-nim"
+provider_type = "nvidia-nim"
+rate_limit_rpm = 40
+rate_limit_max_wait_ms = 2000
+
 [router]
 background = "glm-4.5-air"
 default = "glm-4.6"

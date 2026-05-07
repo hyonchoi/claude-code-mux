@@ -20,4 +20,11 @@ pub enum ProviderError {
 
     #[error("Authentication error: {0}")]
     AuthError(String),
+
+    #[error("Rate limit timeout for provider '{provider}': exceeded wait budget ({max_wait_ms}ms) at {rpm} RPM")]
+    RateLimitTimeout {
+        provider: String,
+        rpm: u32,
+        max_wait_ms: u64,
+    },
 }

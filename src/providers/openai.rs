@@ -2,12 +2,16 @@ use super::{AnthropicProvider, ProviderResponse, ContentBlock, Usage, error::Pro
 use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse, MessageContent};
 use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
 use async_trait::async_trait;
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
+use std::num::NonZeroU32;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
 use std::pin::Pin;
 use futures::stream::Stream;
 use bytes::Bytes;
 use base64::{Engine as _, engine::general_purpose};
+use tokio::time::{timeout, Duration, Instant};
 
 /// Official Codex instructions from OpenAI
 /// Source: https://github.com/openai/codex (rust-v0.58.0)
@@ -201,6 +205,12 @@ pub struct OpenAIProvider {
     oauth_provider: Option<String>,
     /// Token store for OAuth authentication
     token_store: Option<TokenStore>,
+    /// Rate limit in requests per minute
+    rate_limit_rpm: Option<u32>,
+    /// Maximum wait time before allowing the next request to fail over
+    rate_limit_max_wait_ms: Option<u64>,
+    /// Token-bucket limiter for this provider instance
+    rate_limiter: Option<Arc<DefaultDirectRateLimiter>>,
 }
 
 impl OpenAIProvider {
@@ -221,6 +231,85 @@ impl OpenAIProvider {
             custom_headers: Vec::new(),
             oauth_provider,
             token_store,
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+            rate_limiter: None,
+        }
+    }
+
+    /// Set the rate limit in requests per minute.
+    pub fn with_rate_limit(mut self, rate_limit_rpm: Option<u32>) -> Self {
+        self = self.with_rate_limit_config(rate_limit_rpm, None);
+        self
+    }
+
+    /// Set rate-limit parameters for this provider instance.
+    pub fn with_rate_limit_config(
+        mut self,
+        rate_limit_rpm: Option<u32>,
+        rate_limit_max_wait_ms: Option<u64>,
+    ) -> Self {
+        self.rate_limit_rpm = rate_limit_rpm;
+        self.rate_limit_max_wait_ms = rate_limit_rpm.map(|_| {
+            rate_limit_max_wait_ms
+                .filter(|max_wait_ms| *max_wait_ms > 0)
+                .unwrap_or(2_000)
+        });
+        self.rate_limiter = rate_limit_rpm
+            .and_then(NonZeroU32::new)
+            .map(|rpm| Arc::new(RateLimiter::direct(Quota::per_minute(rpm))));
+        self
+    }
+
+    async fn await_rate_limit_permit(&self) -> Result<(), ProviderError> {
+        let Some(rpm) = self.rate_limit_rpm else {
+            return Ok(());
+        };
+
+        if rpm == 0 {
+            return Err(ProviderError::ConfigError(format!(
+                "Provider '{}' has invalid rate_limit_rpm=0",
+                self.name
+            )));
+        }
+
+        let max_wait_ms = self.rate_limit_max_wait_ms.unwrap_or(2_000);
+        let limiter = self.rate_limiter.as_ref().ok_or_else(|| {
+            ProviderError::ConfigError(format!(
+                "Provider '{}' rate limiter not initialized",
+                self.name
+            ))
+        })?;
+
+        let started = Instant::now();
+        match timeout(Duration::from_millis(max_wait_ms), limiter.until_ready()).await {
+            Ok(()) => {
+                let waited = started.elapsed().as_millis() as u64;
+                if waited > 0 {
+                    tracing::debug!(
+                        provider = %self.name,
+                        rpm = rpm,
+                        waited_ms = waited,
+                        max_wait_ms = max_wait_ms,
+                        "Rate limiter delayed provider request",
+                    );
+                }
+                Ok(())
+            }
+            Err(_) => {
+                tracing::warn!(
+                    provider = %self.name,
+                    rpm = rpm,
+                    waited_ms = max_wait_ms,
+                    max_wait_ms = max_wait_ms,
+                    "Rate limiter wait budget exceeded; allowing fallback",
+                );
+                Err(ProviderError::RateLimitTimeout {
+                    provider: self.name.clone(),
+                    rpm,
+                    max_wait_ms,
+                })
+            }
         }
     }
 
@@ -374,6 +463,9 @@ impl OpenAIProvider {
             custom_headers,
             oauth_provider,
             token_store,
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+            rate_limiter: None,
         }
     }
 
@@ -835,6 +927,8 @@ impl OpenAIProvider {
 #[async_trait]
 impl AnthropicProvider for OpenAIProvider {
     async fn send_message(&self, request: AnthropicRequest) -> Result<ProviderResponse, ProviderError> {
+        self.await_rate_limit_permit().await?;
+
         // Get authentication token (API key or OAuth)
         let override_auth = request.passthrough_auth.as_deref();
         let auth_value = self.get_auth_header(override_auth).await?;
@@ -1056,6 +1150,8 @@ impl AnthropicProvider for OpenAIProvider {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError> {
         use futures::stream::TryStreamExt;
 
+        self.await_rate_limit_permit().await?;
+
         // Get authentication token (API key or OAuth)
         let override_auth = request.passthrough_auth.as_deref();
         let auth_value = self.get_auth_header(override_auth).await?;
@@ -1163,5 +1259,22 @@ mod tests {
         let provider = make_provider();
         let result = provider.get_auth_header(None).await.unwrap();
         assert_eq!(result, "internal-api-key");
+    }
+
+    #[test]
+    fn test_with_rate_limit_config_sets_fields() {
+        let provider = make_provider().with_rate_limit_config(Some(40), Some(1500));
+        assert_eq!(provider.rate_limit_rpm, Some(40));
+        assert_eq!(provider.rate_limit_max_wait_ms, Some(1500));
+        assert!(provider.rate_limiter.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_can_be_disabled() {
+        let provider = make_provider().with_rate_limit(None);
+        assert_eq!(provider.rate_limit_rpm, None);
+        assert_eq!(provider.rate_limit_max_wait_ms, None);
+        assert!(provider.rate_limiter.is_none());
+        provider.await_rate_limit_permit().await.unwrap();
     }
 }

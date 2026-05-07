@@ -1,0 +1,208 @@
+# NVIDIA NIM Provider Configuration
+# 
+# NVIDIA NIM (NVIDIA Inference Microservices) provides cloud API access to
+# state-of-the-art LLMs including Meta Llama, Mistral, and other models.
+# The cloud API is OpenAI-compatible.
+#
+# Get your free API key: https://build.nvidia.com/
+# 
+# Setup options:
+# 1. Cloud NIM (recommended) - Use NVIDIA's managed cloud API
+# 2. Self-hosted NIM - Run NIM containers on your own infrastructure
+# 3. Local NIM - Run NIM on your local machine with GPU
+
+# ============================================================================
+# OPTION 1: NVIDIA NIM Cloud API (recommended for getting started)
+# ============================================================================
+# Free tier available with generous rate limits.
+# Rate limit: 40 requests per minute
+# Get your API key at: https://build.nvidia.com/
+#
+# Then use this configuration:
+
+[[providers]]
+name = "nvidia-nim"
+provider_type = "nvidia-nim"
+# Your NVIDIA NIM API key from https://build.nvidia.com/
+api_key = "your-nvidia-nim-api-key-here"
+# NVIDIA's cloud endpoint for NIM
+base_url = "https://integrate.api.nvidia.com/v1"
+enabled = true
+# NVIDIA NIM rate limit: 40 requests per minute
+# OpenAI-compatible provider enforces this limit before outbound calls
+rate_limit_rpm = 40
+# Optional: max wait before fallback to next mapping (default: 2000ms)
+rate_limit_max_wait_ms = 2000
+# Popular NVIDIA NIM models (free tier available):
+# - meta-llama-3.1-405b-instruct (405B parameter model)
+# - meta-llama-3.1-70b-instruct (70B parameter model)
+# - meta-llama-3.1-8b-instruct (8B parameter model, fast & efficient)
+# - mistral-large
+# - mistral-7b-instruct-v0.3
+# - qwen-2.5-72b-instruct
+# - mistral-nemo
+models = []
+
+# ============================================================================
+# OPTION 2: Self-hosted NIM (on your own cloud infrastructure)
+# ============================================================================
+# Deploy NIM containers on your own cloud infrastructure (AWS, GCP, Azure, etc.)
+#
+# [[providers]]
+# name = "nvidia-nim-self-hosted"
+# provider_type = "nvidia-nim"
+# api_key = "your-self-hosted-nim-api-key"  # If authentication is configured
+# base_url = "https://your-domain.com/v1"  # Your self-hosted endpoint
+# enabled = false
+# models = []
+
+# ============================================================================
+# OPTION 3: Local NIM (Docker on your machine)
+# ============================================================================
+# Prerequisites:
+#   - NVIDIA GPU with NVIDIA Container Toolkit installed
+#   - Docker installed
+#   - Run NIM container: docker run -it --rm --gpus all -p 8000:8000 \
+#     nvcr.io/nim/meta-llama-3.1-8b-instruct:latest
+#
+# [[providers]]
+# name = "nvidia-nim-local"
+# provider_type = "nvidia-nim"
+# api_key = ""  # Leave empty for local deployments
+# base_url = "http://localhost:8000/v1"
+# enabled = false
+# # Discover models: curl http://localhost:8000/v1/models | jq '.data[].id'
+# models = []
+
+# ============================================================================
+# Router configuration (optional)
+# ============================================================================
+# Once enabled, you can route requests to NVIDIA NIM:
+
+[router]
+# Route all requests to NVIDIA NIM:
+# default = "nvidia-nim"
+
+# Or use NVIDIA NIM for specific use cases:
+# default = "anthropic"  # Use Claude for general requests
+# background = "nvidia-nim"  # Use NIM for background/batch tasks
+
+# ============================================================================
+# Server configuration
+# ============================================================================
+
+[server]
+host = "127.0.0.1"
+log_level = "info"
+port = 13456
+
+[server.timeouts]
+api_timeout_ms = 600000
+connect_timeout_ms = 10000
+
+# ============================================================================
+# Model Configuration (optional)
+# ============================================================================
+# Map local model names to actual NVIDIA NIM model names:
+
+# [[models]]
+# name = "llama-405b"
+# 
+# [[models.mappings]]
+# actual_model = "meta-llama-3.1-405b-instruct"
+# priority = 1
+# provider = "nvidia-nim"
+#
+# [[models.mappings]]
+# actual_model = "meta-llama-3.1-70b-instruct"
+# priority = 2
+# provider = "nvidia-nim"
+
+# ============================================================================
+# Pricing & Rate Limits
+# ============================================================================
+#
+# NVIDIA NIM Cloud (free tier):
+# - Free API key from https://build.nvidia.com/
+# - Generous rate limits for development
+# - Pay-as-you-go for production workloads
+# - Input tokens: $0.60 per 1M (Llama 3.1 405B)
+# - Output tokens: $2.00 per 1M (Llama 3.1 405B)
+# - Check https://build.nvidia.com/pricing for current rates
+#
+# NVIDIA NIM Local (self-hosted):
+# - Zero API costs (runs on your GPU)
+# - Private inference (data stays on your machine)
+# - Sub-second response times
+# - Requires NVIDIA GPU hardware
+
+# ============================================================================
+# Getting Your API Key
+# ============================================================================
+#
+# 1. Go to https://build.nvidia.com/
+# 2. Sign in or create an account
+# 3. Navigate to "API Keys" section
+# 4. Create a new API key
+# 5. Copy the key and paste it in the `api_key` field above
+# 6. Set `enabled = true` and test with your router
+
+# ============================================================================
+# Available Models
+# ============================================================================
+#
+# Popular models on NVIDIA NIM (check https://build.nvidia.com/explore/discover
+# for complete list):
+#
+# Large Language Models:
+# - meta-llama-3.1-405b-instruct (405B, most capable)
+# - meta-llama-3.1-70b-instruct (70B, good balance)
+# - meta-llama-3.1-8b-instruct (8B, fast & efficient)
+# - mistral-large (powerful multi-task model)
+# - mistral-7b-instruct-v0.3 (lightweight instruction tuned)
+# - qwen-2.5-72b-instruct (advanced reasoning)
+# - mistral-nemo (new high-performance model)
+#
+# Multi-modal Models:
+# - llava-1.5-7b-hf (vision + language)
+# - phi-3.5-vision (lightweight vision model)
+#
+# Specialized Models:
+# - kosmos-2-language-only (multilingual)
+# - arctic (RAG-optimized)
+
+# ============================================================================
+# Troubleshooting
+# ============================================================================
+#
+# Q: How do I get an API key?
+# A: Sign up at https://build.nvidia.com/ and create an API key from the
+#    dashboard. It's free to get started.
+#
+# Q: What models are available?
+# A: Check https://build.nvidia.com/explore/discover for the complete list.
+#    Popular models: Llama 3.1, Mistral, Qwen, and more.
+#
+# Q: What's the pricing?
+# A: Free tier with generous limits. Pay-as-you-go for production.
+#    See https://build.nvidia.com/pricing for details.
+#
+# Q: Can I use both NVIDIA NIM and Anthropic?
+# A: Yes! Configure multiple providers and use the router to direct requests:
+#    - default = "anthropic" (use Claude)
+#    - background = "nvidia-nim" (use Llama for background tasks)
+#
+# Q: Token counting isn't working with NVIDIA NIM models.
+# A: NVIDIA NIM may not support Anthropic's token counting API. The router
+#    falls back to OpenAI tokenizer estimates, which work reasonably well.
+#
+# Q: My API key is invalid or expired.
+# A: Check https://build.nvidia.com/ and verify your API key is still active.
+#    Generate a new one if needed.
+#
+# Q: Connection timeout to NVIDIA NIM API.
+# A: Check your internet connection and that the base URL is correct:
+#    https://integrate.api.nvidia.com/v1
+#
+# Q: I want to run NIM locally instead of using the cloud API.
+# A: See OPTION 3 (Local NIM) above. Requires NVIDIA GPU and Docker.
