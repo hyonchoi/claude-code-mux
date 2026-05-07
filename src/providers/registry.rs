@@ -107,7 +107,7 @@ impl ProviderRegistry {
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
                 "nvidia-nim" => Box::new(
-                    AnthropicCompatibleProvider::new_with_options_and_auth(
+                    OpenAIProvider::new(
                         config.name.clone(),
                         api_key,
                         config
@@ -115,10 +115,8 @@ impl ProviderRegistry {
                             .clone()
                             .unwrap_or_else(|| "https://integrate.api.nvidia.com/v1".to_string()),
                         config.models.clone(),
-                        config.auth_type.clone(),
                         config.oauth_provider.clone(),
                         token_store.clone(),
-                        config.supported_beta_options.clone(),
                     )
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
@@ -330,6 +328,7 @@ impl Default for ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{AnthropicRequest, ContentBlock, Message, MessageContent};
 
     #[test]
     fn test_empty_registry() {
@@ -502,5 +501,91 @@ mod tests {
 
         let registry = ProviderRegistry::from_configs(&[config], None);
         assert!(registry.is_ok(), "disabled providers should be skipped");
+    }
+
+    async fn start_nim_mock_server() -> std::net::SocketAddr {
+        use axum::{routing::post, Json, Router};
+        use tokio::net::TcpListener;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(serde_json::json!({
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "model": "meta-llama-3.1-405b-instruct",
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "nim ok"
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }))
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        addr
+    }
+
+    #[tokio::test]
+    async fn test_nvidia_nim_uses_openai_chat_completions_endpoint() {
+        let addr = start_nim_mock_server().await;
+        let config = ProviderConfig {
+            name: "nvidia-nim".to_string(),
+            provider_type: "nvidia-nim".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some(format!("http://{addr}/v1")),
+            models: vec!["meta-llama-3.1-405b-instruct".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(40),
+            rate_limit_max_wait_ms: Some(2000),
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        let provider = registry.get_provider("nvidia-nim").unwrap();
+        let request = AnthropicRequest {
+            model: "meta-llama-3.1-405b-instruct".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let response = provider.send_message(request).await.unwrap();
+        assert_eq!(response.model, "meta-llama-3.1-405b-instruct");
+        assert!(matches!(
+            response.content.as_slice(),
+            [ContentBlock::Text { text }] if text == "nim ok"
+        ));
     }
 }

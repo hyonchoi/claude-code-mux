@@ -2,6 +2,7 @@
 # 
 # NVIDIA NIM (NVIDIA Inference Microservices) provides cloud API access to
 # state-of-the-art LLMs including Meta Llama, Mistral, and other models.
+# The cloud API is OpenAI-compatible.
 #
 # Get your free API key: https://build.nvidia.com/
 # 
@@ -28,7 +29,7 @@ api_key = "your-nvidia-nim-api-key-here"
 base_url = "https://integrate.api.nvidia.com/v1"
 enabled = true
 # NVIDIA NIM rate limit: 40 requests per minute
-# Anthropic-compatible provider enforces this limit before outbound calls
+# OpenAI-compatible provider enforces this limit before outbound calls
 rate_limit_rpm = 40
 # Optional: max wait before fallback to next mapping (default: 2000ms)
 rate_limit_max_wait_ms = 2000

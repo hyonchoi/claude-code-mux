@@ -565,10 +565,10 @@ Result: glm-4.6 (original model name, routed through model mappings)
 
 ### NVIDIA NIM Cloud API
 
-**Use Case**: Access state-of-the-art open-source models (Llama, Mistral) via NVIDIA's cloud API with fallback to other providers.
+**Use Case**: Access state-of-the-art open-source models (Llama, Mistral) via NVIDIA's OpenAI-compatible cloud API with fallback to other providers.
 
 **Providers**:
-- NVIDIA NIM (cloud API, free tier available)
+- NVIDIA NIM (cloud API, free tier available, OpenAI-compatible)
 - Anthropic (fallback for when NIM is unavailable)
 
 **Setup**:
@@ -618,7 +618,7 @@ background = "llama-405b"
 
 **Rate Limiting**:
 - NVIDIA NIM Cloud API enforces a rate limit of **40 requests per minute**
-- Anthropic-compatible providers enforce this budget when configured with `rate_limit_rpm = 40`
+- The NVIDIA NIM provider enforces this budget when configured with `rate_limit_rpm = 40`
 - Requests wait up to `rate_limit_max_wait_ms` (default: 2000ms), then fallback to the next mapping
 
 **Benefits**:
