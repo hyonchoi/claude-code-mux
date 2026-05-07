@@ -54,17 +54,16 @@ models = []
 name = "kimi-for-coding"
 provider_type = "anthropic"
 
-# NVIDIA NIM Provider - Local Instance
-# To use: set api_key (or empty for local), set base_url to your NIM endpoint, list available models
+# NVIDIA NIM Provider - Cloud API
+# Get your API key from: https://build.nvidia.com/
 [[providers]]
-# For local NIM without authentication, leave api_key empty or set to "none"
-api_key = ""
-base_url = "http://localhost:8000/v1"
+api_key = "your-nvidia-nim-api-key-here"
+base_url = "https://integrate.api.nvidia.com/v1"
 enabled = false
 # List the models available in your NIM instance
-# Query your NIM instance with: curl http://localhost:8000/v1/models | jq '.data[].id'
+# Common NVIDIA NIM models: meta-llama-3.1-405b-instruct, meta-llama-3.1-70b-instruct, etc.
 models = []
-name = "nvidia-nim-local"
+name = "nvidia-nim"
 provider_type = "anthropic"
 
 [router]
