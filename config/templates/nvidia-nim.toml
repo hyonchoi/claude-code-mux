@@ -28,8 +28,10 @@ api_key = "your-nvidia-nim-api-key-here"
 base_url = "https://integrate.api.nvidia.com/v1"
 enabled = true
 # NVIDIA NIM rate limit: 40 requests per minute
-# The router automatically enforces this limit to prevent 429 errors
+# Anthropic-compatible provider enforces this limit before outbound calls
 rate_limit_rpm = 40
+# Optional: max wait before fallback to next mapping (default: 2000ms)
+rate_limit_max_wait_ms = 2000
 # Popular NVIDIA NIM models (free tier available):
 # - meta-llama-3.1-405b-instruct (405B parameter model)
 # - meta-llama-3.1-70b-instruct (70B parameter model)

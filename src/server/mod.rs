@@ -1322,6 +1322,7 @@ mod tests {
                 models: vec![],
                 enabled: Some(true),
                 rate_limit_rpm: None,
+                rate_limit_max_wait_ms: None,
             },
             ProviderConfig {
                 name: "oai1".to_string(),
@@ -1336,6 +1337,7 @@ mod tests {
                 models: vec![],
                 enabled: Some(true),
                 rate_limit_rpm: None,
+                rate_limit_max_wait_ms: None,
             },
         ]
     }

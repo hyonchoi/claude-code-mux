@@ -109,9 +109,13 @@ pub struct ProviderConfig {
     pub enabled: Option<bool>,
 
     /// Rate limit in requests per minute (e.g., 40 for NVIDIA NIM)
-    /// If set, the router will enforce this limit to prevent 429 errors
+    /// If set, provider requests are throttled to this RPM budget.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limit_rpm: Option<u32>,
+    /// Maximum time to wait for a rate-limit permit before failing over (milliseconds).
+    /// Defaults to 2000ms when rate_limit_rpm is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_max_wait_ms: Option<u64>,
 }
 
 impl ProviderConfig {
