@@ -50,7 +50,7 @@ fn strip_beta_options_from_request(
             let options: Vec<&str> = beta_header.split(',').map(|s| s.trim()).collect();
             let filtered: Vec<&str> = options
                 .iter()
-                .filter(|opt| !strip_specific.contains(&opt.to_string()))
+                .filter(|opt| !strip_specific.iter().any(|s| opt.starts_with(s.as_str())))
                 .copied()
                 .collect();
 
@@ -926,6 +926,12 @@ async fn handle_messages(
                 // Update model to actual model name
                 anthropic_request.model = mapping.actual_model.clone();
 
+                // Propagate passthrough auth and beta header before stripping, so the
+                // strip logic can see the actual header value (anthropic_beta_header is
+                // #[serde(skip)] and therefore always None after JSON deserialization)
+                anthropic_request.passthrough_auth = passthrough_token.clone();
+                anthropic_request.anthropic_beta_header = incoming_beta_header.clone();
+
                 // Strip beta options if configured in the mapping
                 strip_beta_options_from_request(
                     &mut anthropic_request,
@@ -935,10 +941,6 @@ async fn handle_messages(
 
                 // Update system if modified during routing
                 anthropic_request.system = request_for_routing.system.clone();
-
-                // Propagate passthrough auth and beta header into per-provider request
-                anthropic_request.passthrough_auth = passthrough_token.clone();
-                anthropic_request.anthropic_beta_header = incoming_beta_header.clone();
 
                 if passthrough_token.is_some() {
                     info!("🔑 Passthrough auth active: original_model={}, target_provider={}", original_model, mapping.provider);
