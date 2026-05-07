@@ -745,4 +745,50 @@ mod tests {
         let result = provider.get_auth_header(None).await.unwrap();
         assert_eq!(result, "internal-api-key");
     }
+
+    #[test]
+    fn test_nvidia_nim_provider_with_rate_limit() {
+        let provider = AnthropicCompatibleProvider::new(
+            "nvidia-nim".to_string(),
+            "nvidia-api-key".to_string(),
+            "https://integrate.api.nvidia.com/v1".to_string(),
+            vec!["meta-llama-3.1-405b-instruct".to_string()],
+            None,
+            None,
+        ).with_rate_limit(Some(40));
+        
+        // Verify provider is created with rate limit
+        assert_eq!(provider.rate_limit_rpm, Some(40));
+    }
+
+    #[test]
+    fn test_anthropic_compatible_provider_without_rate_limit() {
+        let provider = AnthropicCompatibleProvider::new(
+            "anthropic".to_string(),
+            "api-key".to_string(),
+            "https://api.anthropic.com".to_string(),
+            vec![],
+            None,
+            None,
+        );
+        
+        // Verify providers without rate limit have None
+        assert_eq!(provider.rate_limit_rpm, None);
+    }
+
+    #[test]
+    fn test_rate_limit_can_be_set_via_with_rate_limit_method() {
+        let provider = AnthropicCompatibleProvider::new(
+            "test".to_string(),
+            "key".to_string(),
+            "https://example.com".to_string(),
+            vec![],
+            None,
+            None,
+        );
+        assert_eq!(provider.rate_limit_rpm, None);
+        
+        let provider_with_limit = provider.with_rate_limit(Some(50));
+        assert_eq!(provider_with_limit.rate_limit_rpm, Some(50));
+    }
 }

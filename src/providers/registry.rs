@@ -278,4 +278,77 @@ mod tests {
         let result = registry.get_provider_for_model("gpt-4");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_nvidia_nim_provider_config_with_rate_limit() {
+        let config = ProviderConfig {
+            name: "nvidia-nim".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            models: vec!["meta-llama-3.1-405b-instruct".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(40),
+        };
+        
+        // Verify provider configuration has rate limit set
+        assert_eq!(config.name, "nvidia-nim");
+        assert_eq!(config.provider_type, "anthropic");
+        assert_eq!(config.rate_limit_rpm, Some(40));
+        assert_eq!(config.base_url, Some("https://integrate.api.nvidia.com/v1".to_string()));
+    }
+
+    #[test]
+    fn test_provider_registry_with_nvidia_nim() {
+        let config = ProviderConfig {
+            name: "nvidia-nim".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            models: vec!["meta-llama-3.1-405b-instruct".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(40),
+        };
+        
+        let registry = ProviderRegistry::from_configs(&[config], None);
+        assert!(registry.is_ok());
+        
+        let registry = registry.unwrap();
+        let provider = registry.get_provider("nvidia-nim");
+        assert!(provider.is_some());
+    }
+
+    #[test]
+    fn test_rate_limit_rpm_optional() {
+        let config = ProviderConfig {
+            name: "anthropic".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec![],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+        };
+        
+        // Verify providers without rate_limit_rpm work fine
+        assert_eq!(config.rate_limit_rpm, None);
+        
+        let registry = ProviderRegistry::from_configs(&[config], None);
+        assert!(registry.is_ok());
+    }
 }
