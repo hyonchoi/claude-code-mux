@@ -1350,7 +1350,7 @@
                                 <p class="text-gray-600 mb-8">
                                     Optional - only if needed
                                 </p>
-                                <div>
+                                <div class="space-y-6">
                                     <label class="label"
                                         >Custom Endpoint (Optional)</label
                                     >
@@ -1364,6 +1364,45 @@
                                     <div class="helper-text" id="base-url-helper-text">
                                         Only enter if you want to use a
                                         different URL than the default endpoint
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="label"
+                                        >Rate Limit RPM (Optional)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="rate-limit-rpm-input"
+                                        name="rate_limit_rpm"
+                                        class="input-field font-mono"
+                                        placeholder="40"
+                                        min="1"
+                                        step="1"
+                                    />
+                                    <div class="helper-text">
+                                        Leave blank to disable rate limiting for
+                                        this provider.
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="label"
+                                        >Rate Limit Max Wait (Optional)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="rate-limit-max-wait-input"
+                                        name="rate_limit_max_wait_ms"
+                                        class="input-field font-mono"
+                                        placeholder="2000"
+                                        min="1"
+                                        step="1"
+                                    />
+                                    <div class="helper-text">
+                                        Milliseconds to wait for a permit before
+                                        allowing fallback. Only applies when
+                                        RPM is set.
                                     </div>
                                 </div>
                             </div>
@@ -2529,6 +2568,23 @@
                         }
                     }
 
+                    const rateLimitRpmField =
+                        form.querySelector('[name="rate_limit_rpm"]');
+                    if (rateLimitRpmField && provider.rate_limit_rpm != null) {
+                        rateLimitRpmField.value = provider.rate_limit_rpm;
+                    }
+
+                    const rateLimitMaxWaitField = form.querySelector(
+                        '[name="rate_limit_max_wait_ms"]',
+                    );
+                    if (
+                        rateLimitMaxWaitField &&
+                        provider.rate_limit_max_wait_ms != null
+                    ) {
+                        rateLimitMaxWaitField.value =
+                            provider.rate_limit_max_wait_ms;
+                    }
+
                     // Update UI labels
                     document.querySelector(
                         "#providers-add-view h1",
@@ -3444,6 +3500,12 @@
                         formData.get("auth_type")?.trim() || "apikey";
                     const apiKey = formData.get("api_key")?.trim();
                     const baseUrl = formData.get("base_url")?.trim();
+                    const rateLimitRpmRaw = formData
+                        .get("rate_limit_rpm")
+                        ?.trim();
+                    const rateLimitMaxWaitRaw = formData
+                        .get("rate_limit_max_wait_ms")
+                        ?.trim();
 
                     // Validation
                     if (!providerName) {
@@ -3501,6 +3563,41 @@
 
                     // Passthrough auth requires no additional validation - token comes from request
 
+                    let rateLimitRpm = null;
+                    if (rateLimitRpmRaw) {
+                        rateLimitRpm = Number(rateLimitRpmRaw);
+                        if (
+                            !Number.isInteger(rateLimitRpm) ||
+                            rateLimitRpm <= 0
+                        ) {
+                            notifyError(
+                                "Rate Limit RPM must be a positive whole number.",
+                            );
+                            return;
+                        }
+                    }
+
+                    let rateLimitMaxWaitMs = null;
+                    if (rateLimitMaxWaitRaw) {
+                        rateLimitMaxWaitMs = Number(rateLimitMaxWaitRaw);
+                        if (
+                            !Number.isInteger(rateLimitMaxWaitMs) ||
+                            rateLimitMaxWaitMs <= 0
+                        ) {
+                            notifyError(
+                                "Rate Limit Max Wait must be a positive whole number.",
+                            );
+                            return;
+                        }
+
+                        if (!rateLimitRpm) {
+                            notifyError(
+                                "Please set Rate Limit RPM before setting Max Wait.",
+                            );
+                            return;
+                        }
+                    }
+
                     const providerData = {
                         name: providerName,
                         provider_type: providerType,
@@ -3534,6 +3631,14 @@
 
                         if (baseUrl) {
                             providerData.base_url = baseUrl;
+                        }
+                    }
+
+                    if (rateLimitRpm) {
+                        providerData.rate_limit_rpm = rateLimitRpm;
+                        if (rateLimitMaxWaitMs) {
+                            providerData.rate_limit_max_wait_ms =
+                                rateLimitMaxWaitMs;
                         }
                     }
 
