@@ -54,6 +54,19 @@ models = []
 name = "kimi-for-coding"
 provider_type = "anthropic"
 
+# NVIDIA NIM Provider - Local Instance
+# To use: set api_key (or empty for local), set base_url to your NIM endpoint, list available models
+[[providers]]
+# For local NIM without authentication, leave api_key empty or set to "none"
+api_key = ""
+base_url = "http://localhost:8000/v1"
+enabled = false
+# List the models available in your NIM instance
+# Query your NIM instance with: curl http://localhost:8000/v1/models | jq '.data[].id'
+models = []
+name = "nvidia-nim-local"
+provider_type = "anthropic"
+
 [router]
 background = "glm-4.5-air"
 default = "glm-4.6"

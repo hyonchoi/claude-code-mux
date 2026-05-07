@@ -1,0 +1,138 @@
+# NVIDIA NIM Provider Configuration
+# 
+# This template configures NVIDIA NIM (NVIDIA Inference Microservices) as a provider.
+# NIM provides OpenAI-compatible API endpoints for running LLMs locally or in the cloud.
+#
+# Setup options:
+# 1. Local NIM: Run NVIDIA NIM container on your machine (docker/kubernetes)
+# 2. Remote NIM: Use NVIDIA's managed NIM services or self-hosted deployment
+# 3. Cloud NIM: Use NVIDIA's cloud-hosted inference services
+
+# ============================================================================
+# OPTION 1: Local NIM (recommended for development)
+# ============================================================================
+# Prerequisites:
+#   - NVIDIA GPU with NVIDIA Container Toolkit installed
+#   - Docker installed
+#   - Run NIM container: docker run -it --rm --gpus all -p 8000:8000 \
+#     nvcr.io/nim/meta-llama-3.1-8b-instruct:latest
+#
+# Then use this configuration:
+
+[[providers]]
+name = "nvidia-nim-local"
+provider_type = "anthropic"
+# For local NIM without authentication, leave api_key empty
+api_key = ""
+# Base URL pointing to your local NIM instance
+base_url = "http://localhost:8000/v1"
+enabled = true
+# List the models available in your NIM container
+# To discover available models: curl http://localhost:8000/v1/models | jq '.data[].id'
+models = [
+  # Common NIM models:
+  # "meta-llama-3.1-405b-instruct",
+  # "meta-llama-3.1-70b-instruct",
+  # "meta-llama-3.1-8b-instruct",
+  # "meta-llama-2-70b-chat",
+  # "mistral-large",
+  # "mistral-7b-instruct-v0.3",
+  # "nv-embedqa-e5-v5",
+]
+
+# ============================================================================
+# OPTION 2: NVIDIA-hosted NIM (cloud)
+# ============================================================================
+# For NVIDIA's managed NIM services, use your API key and cloud endpoint:
+#
+# [[providers]]
+# name = "nvidia-nim-cloud"
+# provider_type = "anthropic"
+# api_key = "your-nvidia-nim-api-key"
+# base_url = "https://nim.nvidia.com/v1"
+# enabled = false
+# models = [
+#   "meta-llama-3.1-405b-instruct",
+#   "mistral-large",
+# ]
+
+# ============================================================================
+# OPTION 3: Self-hosted Remote NIM
+# ============================================================================
+# For a self-hosted NIM deployment on another machine/cloud:
+#
+# [[providers]]
+# name = "nvidia-nim-remote"
+# provider_type = "anthropic"
+# api_key = "your-api-key-if-secured"  # Empty if no auth required
+# base_url = "https://nim.example.com/v1"
+# enabled = false
+# models = [
+#   "meta-llama-3.1-405b-instruct",
+# ]
+
+# ============================================================================
+# Router configuration (optional)
+# ============================================================================
+# Once enabled, you can route requests to NIM:
+
+[router]
+# Route all requests to local NIM:
+# default = "nvidia-nim-local"
+
+# Or use NIM for specific use cases while keeping other providers for general use:
+# default = "anthropic"  # Use Claude for most requests
+# background = "nvidia-nim-local"  # Use NIM for background/batch tasks
+
+# ============================================================================
+# Server configuration
+# ============================================================================
+
+[server]
+host = "127.0.0.1"
+log_level = "info"
+port = 13456
+
+[server.timeouts]
+api_timeout_ms = 600000
+connect_timeout_ms = 10000
+
+# ============================================================================
+# Model Configuration (optional)
+# ============================================================================
+# Map local model names to actual NIM model names:
+
+# [[models]]
+# name = "llama-405b"
+# 
+# [[models.mappings]]
+# actual_model = "meta-llama-3.1-405b-instruct"
+# priority = 1
+# provider = "nvidia-nim-local"
+
+# ============================================================================
+# Troubleshooting
+# ============================================================================
+#
+# Q: How do I discover which models are available in my NIM instance?
+# A: Query the /models endpoint:
+#    curl http://localhost:8000/v1/models | jq '.data[].id'
+#    Or with authentication:
+#    curl -H "Authorization: Bearer YOUR_API_KEY" https://your-nim-url/v1/models
+#
+# Q: My NIM instance requires authentication but I don't have a key.
+# A: Leave api_key empty (""). Many local NIM deployments don't require keys.
+#    For secured instances, obtain your API key from your NIM deployment admin.
+#
+# Q: Token counting isn't working with NIM models.
+# A: NIM may not support Anthropic's token counting API. The router falls back
+#    to OpenAI tokenizer estimates, which work reasonably for most models.
+#
+# Q: Can I use both local NIM and cloud providers?
+# A: Yes! Configure multiple providers and use the router to direct requests:
+#    - default = "anthropic" (use Claude for main work)
+#    - background = "nvidia-nim-local" (use NIM for background tasks)
+#
+# Q: My NIM deployment is behind a firewall. How do I configure base_url?
+# A: Use your internal network URL (e.g., http://192.168.1.100:8000/v1) or
+#    configure a reverse proxy/VPN tunnel if accessing remotely.
