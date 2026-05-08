@@ -904,15 +904,49 @@ impl OpenAIProvider {
             String::new()
         };
 
+        let mut content = Vec::new();
+        if !text.is_empty() {
+            content.push(ContentBlock::Text { text });
+        }
+
+        if let Some(tool_calls) = choice.message.tool_calls {
+            for tool_call in tool_calls {
+                if tool_call.r#type != "function" {
+                    continue;
+                }
+
+                let input = serde_json::from_str(&tool_call.function.arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(tool_call.function.arguments.clone()));
+
+                content.push(ContentBlock::ToolUse {
+                    id: tool_call.id,
+                    name: tool_call.function.name,
+                    input,
+                });
+            }
+        }
+
+        if content.is_empty() {
+            content.push(ContentBlock::Text {
+                text: String::new(),
+            });
+        }
+
+        let stop_reason = choice.finish_reason.as_ref().map(|reason| match reason.as_str() {
+            "stop" => "end_turn".to_string(),
+            "length" => "max_tokens".to_string(),
+            "tool_calls" => "tool_use".to_string(),
+            "content_filter" => "stop_sequence".to_string(),
+            _ => reason.clone(),
+        });
+
         ProviderResponse {
             id: response.id,
             r#type: "message".to_string(),
             role: "assistant".to_string(),
-            content: vec![ContentBlock::Text {
-                text,
-            }],
+            content,
             model: response.model,
-            stop_reason: choice.finish_reason,
+            stop_reason,
             stop_sequence: None,
             usage: Usage {
                 input_tokens: response.usage.prompt_tokens,
@@ -1311,6 +1345,80 @@ mod tests {
         assert_eq!(provider.rate_limit_rpm, Some(40));
         assert_eq!(provider.rate_limit_max_wait_ms, Some(1500));
         assert!(provider.rate_limiter.is_some());
+    }
+
+    #[test]
+    fn test_transform_response_preserves_tool_calls_as_tool_use() {
+        let provider = make_provider();
+        let response: OpenAIResponse = serde_json::from_str(
+            r#"{
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "model": "z-ai/glm-5.1",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "running tool",
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "Bash",
+                                "arguments": "{\"command\":\"echo hi\"}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let transformed = provider.transform_response(response);
+        assert_eq!(transformed.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(transformed.content.len(), 2);
+
+        match &transformed.content[1] {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "Bash");
+                assert_eq!(input.get("command").and_then(|v| v.as_str()), Some("echo hi"));
+            }
+            other => panic!("Expected ToolUse block, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_transform_response_maps_stop_reason_stop_to_end_turn() {
+        let provider = make_provider();
+        let response: OpenAIResponse = serde_json::from_str(
+            r#"{
+                "id": "chatcmpl-124",
+                "object": "chat.completion",
+                "model": "z-ai/glm-5.1",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "done"
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let transformed = provider.transform_response(response);
+        assert_eq!(transformed.stop_reason.as_deref(), Some("end_turn"));
     }
 
     #[tokio::test]
