@@ -288,20 +288,19 @@ impl AnthropicCompatibleProvider {
         }
     }
 
-    /// Get authentication header value. override_auth takes highest priority.
+    /// Get authentication token value.
+    /// Caller override is only honored when this provider is configured for passthrough auth.
     async fn get_auth_header(&self, override_auth: Option<&str>) -> Result<String, ProviderError> {
-        if let Some(token) = override_auth {
-            // Validate passthrough token format (reject control characters)
-            if token.chars().any(|c| c.is_control()) {
-                return Err(ProviderError::AuthError(
-                    "Bearer token contains invalid characters".to_string(),
-                ));
-            }
-            return Ok(token.to_string());
-        }
-
-        // Check if provider is configured for passthrough auth
         if self.auth_type == AuthType::Passthrough {
+            if let Some(token) = override_auth {
+                // Validate passthrough token format (reject control characters)
+                if token.chars().any(|c| c.is_control()) {
+                    return Err(ProviderError::AuthError(
+                        "Bearer token contains invalid characters".to_string(),
+                    ));
+                }
+                return Ok(token.to_string());
+            }
             return Err(ProviderError::AuthError(
                 "Passthrough auth requires token from request headers".to_string(),
             ));
@@ -522,7 +521,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             .header("Content-Type", "application/json");
 
         // Set auth header based on OAuth vs API key
-        if override_auth.is_some() || self.is_oauth() {
+        if self.auth_type == AuthType::Passthrough || self.is_oauth() {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", auth_value));
             tracing::debug!("🔐 Using OAuth Bearer token for {}", self.name);
         } else {
@@ -662,7 +661,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                 .header("Content-Type", "application/json");
 
             // Set auth header
-            if override_auth.is_some() || self.is_oauth() {
+            if self.auth_type == AuthType::Passthrough || self.is_oauth() {
                 req_builder = req_builder
                     .header("Authorization", format!("Bearer {}", auth_value))
                     .header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
@@ -755,7 +754,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             .header("Content-Type", "application/json");
 
         // Set auth header based on OAuth vs API key
-        if override_auth.is_some() || self.is_oauth() {
+        if self.auth_type == AuthType::Passthrough || self.is_oauth() {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", auth_value));
             tracing::debug!("🔐 Using OAuth Bearer token for streaming on {}", self.name);
         } else {
@@ -894,13 +893,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_auth_header_uses_override_when_provided() {
+    async fn test_get_auth_header_ignores_override_for_api_key_auth() {
         let provider = make_provider();
         let result = provider
             .get_auth_header(Some("caller-token"))
             .await
             .unwrap();
-        assert_eq!(result, "caller-token");
+        assert_eq!(result, "internal-api-key");
     }
 
     #[tokio::test]
@@ -908,6 +907,24 @@ mod tests {
         let provider = make_provider();
         let result = provider.get_auth_header(None).await.unwrap();
         assert_eq!(result, "internal-api-key");
+    }
+
+    #[tokio::test]
+    async fn test_get_auth_header_uses_override_for_passthrough_auth() {
+        let provider = AnthropicCompatibleProvider::new_with_auth(
+            "test".to_string(),
+            "internal-api-key".to_string(),
+            "https://api.anthropic.com".to_string(),
+            vec![],
+            AuthType::Passthrough,
+            None,
+            None,
+        );
+        let result = provider
+            .get_auth_header(Some("caller-token"))
+            .await
+            .unwrap();
+        assert_eq!(result, "caller-token");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use super::{AnthropicProvider, ProviderResponse, ContentBlock, Usage, error::ProviderError};
+use super::{AnthropicProvider, AuthType, ProviderResponse, ContentBlock, Usage, error::ProviderError};
 use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse, MessageContent};
 use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
 use async_trait::async_trait;
@@ -197,6 +197,7 @@ struct ResponsesUsage {
 pub struct OpenAIProvider {
     name: String,
     api_key: String,
+    auth_type: AuthType,
     base_url: String,
     client: Client,
     models: Vec<String>,
@@ -222,9 +223,30 @@ impl OpenAIProvider {
         oauth_provider: Option<String>,
         token_store: Option<TokenStore>,
     ) -> Self {
+        Self::new_with_auth(
+            name,
+            api_key,
+            base_url,
+            models,
+            AuthType::ApiKey,
+            oauth_provider,
+            token_store,
+        )
+    }
+
+    pub fn new_with_auth(
+        name: String,
+        api_key: String,
+        base_url: String,
+        models: Vec<String>,
+        auth_type: AuthType,
+        oauth_provider: Option<String>,
+        token_store: Option<TokenStore>,
+    ) -> Self {
         Self {
             name,
             api_key,
+            auth_type,
             base_url,
             client: Client::new(),
             models,
@@ -457,6 +479,7 @@ impl OpenAIProvider {
         Self {
             name,
             api_key,
+            auth_type: AuthType::ApiKey,
             base_url,
             client: Client::new(),
             models,
@@ -593,16 +616,22 @@ impl OpenAIProvider {
         )
     }
 
-    /// Get authentication header value. override_auth takes highest priority.
+    /// Get authentication token value for Authorization Bearer header.
+    /// Caller override is only honored when this provider is configured for passthrough auth.
     async fn get_auth_header(&self, override_auth: Option<&str>) -> Result<String, ProviderError> {
-        if let Some(token) = override_auth {
-            // Validate passthrough token format (reject control characters)
-            if token.chars().any(|c| c.is_control()) {
-                return Err(ProviderError::AuthError(
-                    "Bearer token contains invalid characters".to_string()
-                ));
+        if self.auth_type == AuthType::Passthrough {
+            if let Some(token) = override_auth {
+                // Validate passthrough token format (reject control characters)
+                if token.chars().any(|c| c.is_control()) {
+                    return Err(ProviderError::AuthError(
+                        "Bearer token contains invalid characters".to_string()
+                    ));
+                }
+                return Ok(token.to_string());
             }
-            return Ok(token.to_string());
+            return Err(ProviderError::AuthError(
+                "Passthrough auth requires token from request headers".to_string(),
+            ));
         }
 
         if let Some(ref oauth_provider_id) = self.oauth_provider {
@@ -1248,10 +1277,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_auth_header_uses_override_when_provided() {
+    async fn test_get_auth_header_ignores_override_for_api_key_auth() {
         let provider = make_provider();
         let result = provider.get_auth_header(Some("caller-token")).await.unwrap();
-        assert_eq!(result, "caller-token");
+        assert_eq!(result, "internal-api-key");
     }
 
     #[tokio::test]
@@ -1259,6 +1288,21 @@ mod tests {
         let provider = make_provider();
         let result = provider.get_auth_header(None).await.unwrap();
         assert_eq!(result, "internal-api-key");
+    }
+
+    #[tokio::test]
+    async fn test_get_auth_header_uses_override_for_passthrough_auth() {
+        let provider = OpenAIProvider::new_with_auth(
+            "test".to_string(),
+            "internal-api-key".to_string(),
+            "https://api.openai.com/v1".to_string(),
+            vec![],
+            AuthType::Passthrough,
+            None,
+            None,
+        );
+        let result = provider.get_auth_header(Some("caller-token")).await.unwrap();
+        assert_eq!(result, "caller-token");
     }
 
     #[test]
