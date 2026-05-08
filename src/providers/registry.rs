@@ -77,7 +77,7 @@ impl ProviderRegistry {
             // Create provider instance based on type
             let provider: Box<dyn AnthropicProvider> = match config.provider_type.as_str() {
                 // OpenAI
-                "openai" => Box::new(OpenAIProvider::new(
+                "openai" => Box::new(OpenAIProvider::new_with_auth(
                     config.name.clone(),
                     api_key,
                     config
@@ -85,6 +85,7 @@ impl ProviderRegistry {
                         .clone()
                         .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
                     config.models.clone(),
+                    config.auth_type.clone(),
                     config.oauth_provider.clone(),
                     token_store.clone(),
                 )),
@@ -107,7 +108,7 @@ impl ProviderRegistry {
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
                 "nvidia-nim" => Box::new(
-                    OpenAIProvider::new(
+                    OpenAIProvider::new_with_auth(
                         config.name.clone(),
                         api_key,
                         config
@@ -115,6 +116,7 @@ impl ProviderRegistry {
                             .clone()
                             .unwrap_or_else(|| "https://integrate.api.nvidia.com/v1".to_string()),
                         config.models.clone(),
+                        config.auth_type.clone(),
                         config.oauth_provider.clone(),
                         token_store.clone(),
                     )
