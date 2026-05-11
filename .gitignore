@@ -29,3 +29,5 @@ logs/
 
 .bg-shell/
 .claude/settings.local.json
+# Added by code-review-graph
+.code-review-graph/
