@@ -15,7 +15,7 @@ const CODEX_INSTRUCTIONS: &str = include_str!("codex_instructions.md");
 
 /// OpenAI Chat Completions request format
 #[derive(Debug, Serialize)]
-struct OpenAIRequest {
+pub(crate) struct OpenAIRequest {
     model: String,
     messages: Vec<OpenAIMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,7 +67,7 @@ struct OpenAIResponsesMessage {
 /// Content can be string or array of content parts
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-enum OpenAIContent {
+pub(crate) enum OpenAIContent {
     String(String),
     Parts(Vec<OpenAIContentPart>),
 }
@@ -75,7 +75,7 @@ enum OpenAIContent {
 /// Content part (text or image_url)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-enum OpenAIContentPart {
+pub(crate) enum OpenAIContentPart {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image_url")]
@@ -84,13 +84,13 @@ enum OpenAIContentPart {
 
 /// Image URL object
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenAIImageUrl {
+pub(crate) struct OpenAIImageUrl {
     url: String,
 }
 
 /// Tool call in assistant message
 #[derive(Debug, Serialize, Deserialize)]
-struct OpenAIToolCall {
+pub(crate) struct OpenAIToolCall {
     id: String,
     r#type: String, // "function"
     function: OpenAIFunctionCall,
@@ -98,21 +98,21 @@ struct OpenAIToolCall {
 
 /// Function call details
 #[derive(Debug, Serialize, Deserialize)]
-struct OpenAIFunctionCall {
+pub(crate) struct OpenAIFunctionCall {
     name: String,
     arguments: String, // JSON string
 }
 
 /// Tool definition
 #[derive(Debug, Serialize, Deserialize)]
-struct OpenAITool {
+pub(crate) struct OpenAITool {
     r#type: String, // "function"
     function: OpenAIFunctionDef,
 }
 
 /// Function definition
 #[derive(Debug, Serialize, Deserialize)]
-struct OpenAIFunctionDef {
+pub(crate) struct OpenAIFunctionDef {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
@@ -121,7 +121,7 @@ struct OpenAIFunctionDef {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct OpenAIMessage {
+pub(crate) struct OpenAIMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<OpenAIContent>,
@@ -135,7 +135,7 @@ struct OpenAIMessage {
 
 /// OpenAI Chat Completions response format
 #[derive(Debug, Deserialize)]
-struct OpenAIResponse {
+pub(crate) struct OpenAIResponse {
     id: String,
     #[serde(default, rename = "object")]
     _object: String,
@@ -145,13 +145,13 @@ struct OpenAIResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAIChoice {
+pub(crate) struct OpenAIChoice {
     message: OpenAIMessage,
     finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAIUsage {
+pub(crate) struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
     #[serde(default)]
@@ -576,7 +576,7 @@ impl OpenAIProvider {
     }
 
     /// Transform Anthropic request to OpenAI format
-    fn transform_request(&self, request: &AnthropicRequest) -> Result<OpenAIRequest, ProviderError> {
+    pub(crate) fn transform_request(&self, request: &AnthropicRequest) -> Result<OpenAIRequest, ProviderError> {
         let mut openai_messages = Vec::new();
 
         // Add system message if present
@@ -753,7 +753,7 @@ impl OpenAIProvider {
     }
 
     /// Transform OpenAI response to Anthropic format
-    fn transform_response(&self, response: OpenAIResponse) -> ProviderResponse {
+    pub(crate) fn transform_response(&self, response: OpenAIResponse) -> ProviderResponse {
         let choice = response.choices.into_iter().next()
             .expect("OpenAI response must have at least one choice");
 
