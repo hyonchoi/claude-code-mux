@@ -899,6 +899,24 @@
                                             </div>
                                         </div>
                                     </label>
+                                    <label class="cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="provider_type"
+                                            value="copilot"
+                                            class="peer sr-only"
+                                        />
+                                        <div
+                                            class="p-6 border-2 border-gray-200 rounded-xl peer-checked:border-blue-600 peer-checked:bg-blue-50 hover:border-gray-300 transition-all"
+                                        >
+                                            <div class="text-xl font-bold mb-1">
+                                                GitHub Copilot
+                                            </div>
+                                            <div class="text-sm text-gray-600">
+                                                GPT-4o, Claude via Copilot subscription
+                                            </div>
+                                        </div>
+                                    </label>
                                 </div>
                             </div>
 
@@ -3882,6 +3900,17 @@
                         <li>Copy the authorization code</li>
                         <li>Paste it in the field below</li>
                     `;
+                } else if (providerType === "copilot") {
+                    oauthLabel.textContent = "OAuth (GitHub Copilot)";
+                    oauthDescription.textContent =
+                        "Free for GitHub Copilot subscribers";
+                    step1Instruction.textContent =
+                        "Click the button below to authenticate with your GitHub Copilot account.";
+                    step2Instructions.innerHTML = `
+                        <li>A code will appear — enter it at github.com/login/device</li>
+                        <li>Log in to your GitHub account and authorize</li>
+                        <li>Return here and click "I've Authorized"</li>
+                    `;
                 } else {
                     oauthLabel.textContent = "OAuth (Claude Pro/Max)";
                     oauthDescription.textContent =
@@ -4049,11 +4078,14 @@
             }
 
             async function startOAuthFlow() {
+                const providerType = document.querySelector(
+                    'input[name="provider_type"]:checked',
+                )?.value;
+                if (providerType === "copilot") {
+                    return startCopilotFlow();
+                }
                 try {
                     // Determine oauth_type based on provider type
-                    const providerType = document.querySelector(
-                        'input[name="provider_type"]:checked',
-                    )?.value;
                     let oauth_type = "max"; // default to anthropic max
 
                     if (providerType === "openai") {
@@ -4150,7 +4182,110 @@
                 }
             }
 
+            async function startCopilotFlow() {
+                sessionStorage.removeItem("copilot_device_code");
+                sessionStorage.removeItem("copilot_provider_id");
+                sessionStorage.removeItem("copilot_expires_at");
+
+                const providerName =
+                    document.querySelector('input[name="provider_name"]')?.value || "copilot";
+
+                try {
+                    const response = await fetch("/api/oauth/copilot-start", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ provider_id: providerName }),
+                    });
+                    if (!response.ok) throw new Error("Failed to start Copilot auth");
+                    const { user_code, verification_uri, device_code, expires_in } =
+                        await response.json();
+
+                    document.getElementById("oauth-step-1").classList.add("hidden");
+                    document.getElementById("oauth-step-2").classList.remove("hidden");
+                    document.getElementById("oauth-step2-instructions").innerHTML = `
+                        <li>
+                            Go to <a href="${escapeHtml(verification_uri)}" target="_blank"
+                                class="text-blue-600 underline">${escapeHtml(verification_uri)}</a>
+                        </li>
+                        <li>Enter code: <strong class="font-mono text-lg bg-gray-100 px-2 py-1 rounded">${escapeHtml(user_code)}</strong></li>
+                        <li>Log in to GitHub and authorize</li>
+                        <li>Click "I've Authorized" below</li>
+                    `;
+
+                    window.open(verification_uri, "GitHub Copilot Auth", "width=600,height=800");
+
+                    sessionStorage.setItem("copilot_device_code", device_code);
+                    sessionStorage.setItem("copilot_provider_id", providerName);
+                    sessionStorage.setItem(
+                        "copilot_expires_at",
+                        String(Date.now() + expires_in * 1000),
+                    );
+
+                    notifySuccess("Enter the code on GitHub, then click 'I\\'ve Authorized'.");
+                } catch (error) {
+                    notifyError(`Failed to start Copilot auth: ${error.message}`);
+                }
+            }
+
+            async function completeCopilotFlow() {
+                const deviceCode = sessionStorage.getItem("copilot_device_code");
+                const providerId = sessionStorage.getItem("copilot_provider_id");
+                const expiresAt = parseInt(
+                    sessionStorage.getItem("copilot_expires_at") || "0",
+                );
+
+                if (!deviceCode || !providerId) {
+                    notifyError("Session expired. Please restart the flow.");
+                    return;
+                }
+                if (Date.now() > expiresAt) {
+                    notifyError("Device code expired. Please start the flow again.");
+                    document.getElementById("oauth-step-1").classList.remove("hidden");
+                    document.getElementById("oauth-step-2").classList.add("hidden");
+                    return;
+                }
+
+                notifySuccess("Checking authorization...");
+
+                while (Date.now() < expiresAt) {
+                    try {
+                        const response = await fetch("/api/oauth/copilot-exchange", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                provider_id: providerId,
+                                device_code: deviceCode,
+                            }),
+                        });
+                        if (!response.ok) throw new Error("Exchange request failed");
+                        const data = await response.json();
+
+                        if (data.status === "success") {
+                            document.getElementById("oauth-step-2").classList.add("hidden");
+                            document.getElementById("oauth-step-3").classList.remove("hidden");
+                            sessionStorage.setItem("oauth_provider_id", providerId);
+                            notifySuccess(`GitHub Copilot authenticated! Token saved for ${providerId}`);
+                            return;
+                        } else if (data.status === "expired") {
+                            notifyError("Device code expired. Please start the flow again.");
+                            document.getElementById("oauth-step-1").classList.remove("hidden");
+                            document.getElementById("oauth-step-2").classList.add("hidden");
+                            return;
+                        }
+                        // status === "pending": server already waited 60s, loop continues
+                    } catch (error) {
+                        notifyError(`Exchange failed: ${error.message}`);
+                        return;
+                    }
+                }
+
+                notifyError("Authorization timed out. Please start the flow again.");
+            }
+
             async function completeOAuthFlow() {
+                if (sessionStorage.getItem("copilot_device_code")) {
+                    return completeCopilotFlow();
+                }
                 try {
                     const code = document
                         .getElementById("oauth-code-input")
@@ -4235,6 +4370,9 @@
                     .classList.remove("hidden");
                 document.getElementById("oauth-code-input").value = "";
                 sessionStorage.removeItem("oauth_verifier");
+                sessionStorage.removeItem("copilot_device_code");
+                sessionStorage.removeItem("copilot_provider_id");
+                sessionStorage.removeItem("copilot_expires_at");
                 notifySuccess("OAuth flow canceled");
             }
 
