@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
+use crate::auth::github_copilot::{
+    start_device_flow, poll_for_github_token, exchange_for_copilot_token, PollResult,
+};
 
 use super::AppState;
 
@@ -476,4 +479,103 @@ pub async fn oauth_callback(
 </body>
 </html>
 "#))
+}
+
+// ── Copilot device code flow ─────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CopilotStartRequest {
+    pub provider_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CopilotStartResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CopilotExchangeRequest {
+    pub provider_id: String,
+    pub device_code: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CopilotExchangeResponse {
+    pub status: String, // "success" | "pending" | "expired"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+}
+
+/// Start GitHub Copilot device code flow.
+pub async fn copilot_start(
+    State(_state): State<Arc<AppState>>,
+    Json(_req): Json<CopilotStartRequest>,
+) -> Result<Json<CopilotStartResponse>, (StatusCode, String)> {
+    let device_resp = start_device_flow().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start device flow: {}", e))
+    })?;
+
+    Ok(Json(CopilotStartResponse {
+        device_code: device_resp.device_code,
+        user_code: device_resp.user_code,
+        verification_uri: device_resp.verification_uri,
+        expires_in: device_resp.expires_in,
+        interval: device_resp.interval,
+    }))
+}
+
+/// Poll GitHub for device code authorization. Hard 60-second timeout per call.
+pub async fn copilot_exchange(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CopilotExchangeRequest>,
+) -> Result<Json<CopilotExchangeResponse>, (StatusCode, String)> {
+    let poll_result = poll_for_github_token(&req.device_code, 5, 60)
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Polling error: {}", e))
+        })?;
+
+    match poll_result {
+        PollResult::Success(github_token) => {
+            let copilot_token = exchange_for_copilot_token(&github_token).await.map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Copilot token exchange failed: {}", e))
+            })?;
+
+            let expires_at =
+                chrono::DateTime::from_timestamp(copilot_token.expires_at as i64, 0)
+                    .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
+
+            let oauth_token = crate::auth::OAuthToken {
+                provider_id: req.provider_id.clone(),
+                access_token: copilot_token.token,
+                refresh_token: github_token,
+                expires_at,
+                enterprise_url: None,
+                project_id: None,
+            };
+
+            state.token_store.save(oauth_token).map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save token: {}", e))
+            })?;
+
+            tracing::info!("Copilot authentication successful for '{}'", req.provider_id);
+
+            Ok(Json(CopilotExchangeResponse {
+                status: "success".to_string(),
+                provider_id: Some(req.provider_id),
+            }))
+        }
+        PollResult::Pending => Ok(Json(CopilotExchangeResponse {
+            status: "pending".to_string(),
+            provider_id: None,
+        })),
+        PollResult::Expired => Ok(Json(CopilotExchangeResponse {
+            status: "expired".to_string(),
+            provider_id: None,
+        })),
+    }
 }

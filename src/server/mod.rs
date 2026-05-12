@@ -84,7 +84,9 @@ pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) ->
         .route("/auth/callback", get(oauth_handlers::oauth_callback))  // OpenAI Codex uses this path
         .route("/api/oauth/tokens", get(oauth_handlers::oauth_list_tokens))
         .route("/api/oauth/tokens/delete", post(oauth_handlers::oauth_delete_token))
-        .route("/api/oauth/tokens/refresh", post(oauth_handlers::oauth_refresh_token));
+        .route("/api/oauth/tokens/refresh", post(oauth_handlers::oauth_refresh_token))
+        .route("/api/oauth/copilot-start", post(oauth_handlers::copilot_start))
+        .route("/api/oauth/copilot-exchange", post(oauth_handlers::copilot_exchange));
 
     // Clone state before moving it
     let oauth_state = state.clone();
