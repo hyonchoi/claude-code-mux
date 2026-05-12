@@ -178,6 +178,13 @@ impl ProviderRegistry {
                     ))
                 }
 
+                // GitHub Copilot (OAuth-based)
+                "copilot" => Box::new(crate::providers::CopilotProvider::new(
+                    config.name.clone(),
+                    config.models.clone(),
+                    token_store.clone(),
+                )),
+
                 other => {
                     return Err(ProviderError::ConfigError(
                         format!("Unknown provider type: {}", other)
@@ -253,5 +260,28 @@ mod tests {
         let registry = ProviderRegistry::new();
         let result = registry.get_provider_for_model("gpt-4");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_copilot_provider_registration() {
+        use crate::providers::{AuthType, ProviderConfig};
+
+        let config = ProviderConfig {
+            name: "my-copilot".to_string(),
+            provider_type: "copilot".to_string(),
+            auth_type: AuthType::OAuth,
+            oauth_provider: Some("my-copilot".to_string()),
+            api_key: None,
+            base_url: None,
+            project_id: None,
+            location: None,
+            models: vec!["gpt-4o".to_string()],
+            enabled: Some(true),
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("my-copilot").is_some());
     }
 }
