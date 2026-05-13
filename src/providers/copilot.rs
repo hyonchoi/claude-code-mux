@@ -136,7 +136,7 @@ impl AnthropicProvider for CopilotProvider {
         }
 
         let response_text = response.text().await.map_err(ProviderError::HttpError)?;
-        tracing::debug!("Copilot provider response: {}", response_text);
+        tracing::debug!("Copilot provider response: {} bytes", response_text.len());
 
         let openai_response: OpenAIResponse = serde_json::from_str(&response_text)
             .map_err(|e| ProviderError::ApiError { status: 500, message: e.to_string() })?;
