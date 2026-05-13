@@ -65,12 +65,13 @@ impl CopilotProvider {
             }
 
             let github_token = token.refresh_token.clone();
-            let copilot_resp = refresh_copilot_token(&github_token).await.map_err(|e| {
+            let copilot_resp = refresh_copilot_token(&self.client, &github_token).await.map_err(|e| {
                 ProviderError::AuthError(format!("Failed to refresh Copilot token: {}", e))
             })?;
 
             let new_expires_at = chrono::DateTime::from_timestamp(copilot_resp.expires_at as i64, 0)
-                .unwrap_or_else(|| Utc::now() + chrono::Duration::minutes(30));
+            let new_expires_at = chrono::DateTime::from_timestamp(
+            ).unwrap_or_else(|| Utc::now() + chrono::Duration::minutes(30));
 
             let updated_token = OAuthToken {
                 provider_id: token.provider_id.clone(),

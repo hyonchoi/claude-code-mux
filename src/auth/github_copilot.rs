@@ -50,8 +50,7 @@ pub enum PollResult {
 // ── Public functions ──────────────────────────────────────────────────────────
 
 /// Start GitHub device code flow. Returns response with user_code and verification_uri.
-pub async fn start_device_flow() -> Result<DeviceCodeResponse> {
-    let client = Client::new();
+pub async fn start_device_flow(client: &Client) -> Result<DeviceCodeResponse> {
     let response = client
         .post(GITHUB_DEVICE_CODE_URL)
         .header("Accept", "application/json")
@@ -74,10 +73,10 @@ pub async fn start_device_flow() -> Result<DeviceCodeResponse> {
 /// `interval` is the current polling interval in seconds (may increase on slow_down).
 /// Returns updated interval so the caller can adjust for slow_down.
 pub async fn poll_github_token_once(
+    client: &Client,
     device_code: &str,
     interval: u64,
 ) -> Result<(PollResult, u64)> {
-    let client = Client::new();
     let body = format!(
         "client_id={}&device_code={}&grant_type=urn:ietf:params:oauth:grant-type:device_code",
         GITHUB_CLIENT_ID, device_code
@@ -114,6 +113,7 @@ pub async fn poll_github_token_once(
 /// Poll GitHub for authorization for up to `max_secs` seconds.
 /// Returns the GitHub OAuth access token on success, or PollResult::Pending/Expired.
 pub async fn poll_for_github_token(
+    client: &Client,
     device_code: &str,
     mut interval: u64,
     max_secs: u64,
@@ -127,7 +127,7 @@ pub async fn poll_for_github_token(
             return Ok(PollResult::Pending);
         }
 
-        let (result, new_interval) = poll_github_token_once(device_code, interval).await?;
+        let (result, new_interval) = poll_github_token_once(client, device_code, interval).await?;
         interval = new_interval;
 
         match result {
@@ -139,13 +139,13 @@ pub async fn poll_for_github_token(
 }
 
 /// Exchange a GitHub OAuth access token for a Copilot bearer token.
-pub async fn exchange_for_copilot_token(github_token: &str) -> Result<CopilotTokenResponse> {
-    fetch_copilot_token(github_token).await
+pub async fn exchange_for_copilot_token(client: &Client, github_token: &str) -> Result<CopilotTokenResponse> {
+    fetch_copilot_token(client, github_token).await
 }
 
 /// Refresh an existing Copilot bearer token using the stored GitHub OAuth token.
-pub async fn refresh_copilot_token(github_token: &str) -> Result<CopilotTokenResponse> {
-    fetch_copilot_token(github_token).await
+pub async fn refresh_copilot_token(client: &Client, github_token: &str) -> Result<CopilotTokenResponse> {
+    fetch_copilot_token(client, github_token).await
 }
 
 /// Parse the `proxy-ep` field from a semicolon-delimited Copilot bearer token.
@@ -166,8 +166,7 @@ pub fn parse_proxy_ep(bearer: &str) -> String {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-async fn fetch_copilot_token(github_token: &str) -> Result<CopilotTokenResponse> {
-    let client = Client::new();
+async fn fetch_copilot_token(client: &Client, github_token: &str) -> Result<CopilotTokenResponse> {
     let response = client
         .get(COPILOT_TOKEN_URL)
         .header("Authorization", format!("Bearer {}", github_token))

@@ -11,6 +11,7 @@ use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
 use crate::auth::github_copilot::{
     start_device_flow, poll_for_github_token, exchange_for_copilot_token, PollResult,
 };
+use reqwest::Client;
 
 use super::AppState;
 
@@ -515,7 +516,8 @@ pub async fn copilot_start(
     State(_state): State<Arc<AppState>>,
     Json(_req): Json<CopilotStartRequest>,
 ) -> Result<Json<CopilotStartResponse>, (StatusCode, String)> {
-    let device_resp = start_device_flow().await.map_err(|e| {
+    let client = Client::new();
+    let device_resp = start_device_flow(&client).await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start device flow: {}", e))
     })?;
 
@@ -533,7 +535,10 @@ pub async fn copilot_exchange(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CopilotExchangeRequest>,
 ) -> Result<Json<CopilotExchangeResponse>, (StatusCode, String)> {
-    let poll_result = poll_for_github_token(&req.device_code, 5, 60)
+    }
+
+    let client = Client::new();
+    let poll_result = poll_for_github_token(&client, &req.device_code, 5, 60)
         .await
         .map_err(|e| {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Polling error: {}", e))
@@ -541,7 +546,7 @@ pub async fn copilot_exchange(
 
     match poll_result {
         PollResult::Success(github_token) => {
-            let copilot_token = exchange_for_copilot_token(&github_token).await.map_err(|e| {
+            let copilot_token = exchange_for_copilot_token(&client, &github_token).await.map_err(|e| {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Copilot token exchange failed: {}", e))
             })?;
 
