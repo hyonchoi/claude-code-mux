@@ -8,17 +8,48 @@ use crate::providers::ProviderRegistry;
 use crate::auth::TokenStore;
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Request, StatusCode},
+    middleware::{self, Next},
     response::{
         Html, IntoResponse, Response, sse::{Event, Sse},
     },
     routing::{get, post},
     Form, Json, Router as AxumRouter,
+    body::Body,
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use futures::stream::StreamExt;
+
+/// Middleware that enforces the configured API key on protected routes.
+/// If server.api_key is set, requests must include it via X-Api-Key or Authorization: Bearer.
+/// If no api_key is configured, all requests are allowed (backwards compatible).
+async fn require_api_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if let Some(ref expected) = state.config.server.api_key {
+        let provided = headers
+            .get("x-api-key")
+            .map(|v| v.to_str().unwrap_or(""))
+            .or_else(|| {
+                headers.get("authorization").and_then(|v| {
+                    let s = v.to_str().ok()?;
+                    s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer "))
+                })
+            })
+            .unwrap_or("");
+
+        if provided != expected {
+            warn!("Request rejected: invalid or missing API key for {}", request.uri().path());
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+    Ok(next.run(request).await)
+}
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -62,13 +93,18 @@ pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) ->
         config_path,
     });
 
-    // Build router
-    let app = AxumRouter::new()
+    // Build router — public routes (no auth required)
+    let public_routes = AxumRouter::new()
         .route("/", get(serve_admin))
+        .route("/health", get(health_check))
+        .route("/api/oauth/callback", get(oauth_handlers::oauth_callback))
+        .route("/auth/callback", get(oauth_handlers::oauth_callback));
+
+    // Protected routes (auth middleware applied when api_key is configured)
+    let protected_routes = AxumRouter::new()
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
         .route("/v1/chat/completions", post(handle_openai_chat_completions))
-        .route("/health", get(health_check))
         .route("/api/models", get(get_models))
         .route("/api/providers", get(get_providers))
         .route("/api/models-config", get(get_models_config))
@@ -77,20 +113,21 @@ pub async fn start_server(config: AppConfig, config_path: std::path::PathBuf) ->
         .route("/api/config/json", get(get_config_json))
         .route("/api/config/json", post(update_config_json))
         .route("/api/restart", post(restart_server))
-        // OAuth endpoints
         .route("/api/oauth/authorize", post(oauth_handlers::oauth_authorize))
         .route("/api/oauth/exchange", post(oauth_handlers::oauth_exchange))
-        .route("/api/oauth/callback", get(oauth_handlers::oauth_callback))
-        .route("/auth/callback", get(oauth_handlers::oauth_callback))  // OpenAI Codex uses this path
         .route("/api/oauth/tokens", get(oauth_handlers::oauth_list_tokens))
         .route("/api/oauth/tokens/delete", post(oauth_handlers::oauth_delete_token))
         .route("/api/oauth/tokens/refresh", post(oauth_handlers::oauth_refresh_token))
         .route("/api/oauth/copilot-start", post(oauth_handlers::copilot_start))
-        .route("/api/oauth/copilot-exchange", post(oauth_handlers::copilot_exchange));
+        .route("/api/oauth/copilot-exchange", post(oauth_handlers::copilot_exchange))
+        .layer(middleware::from_fn_with_state(state.clone(), require_api_key));
+
+    let app = public_routes
+        .merge(protected_routes)
+        .with_state(state.clone());
 
     // Clone state before moving it
-    let oauth_state = state.clone();
-    let app = app.with_state(state);
+    let oauth_state = state;
 
     // Bind to main address
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -213,9 +250,27 @@ async fn update_config(
     Ok(Html("<div class='px-4 py-3 rounded-xl bg-primary/20 border border-primary/50 text-foreground text-sm'>✅ Configuration saved successfully! Please restart the server to apply changes.</div>".to_string()))
 }
 
+/// Redact api_key values in provider configs before sending to clients.
+fn redact_provider_api_keys(providers: &serde_json::Value) -> serde_json::Value {
+    let mut result = providers.clone();
+    if let Some(arr) = result.as_array_mut() {
+        for provider in arr.iter_mut() {
+            if let Some(obj) = provider.as_object_mut() {
+                if let Some(api_key) = obj.remove("api_key") {
+                    obj.insert("api_key_set".to_string(), serde_json::Value::Bool(
+                        !api_key.is_null() && !api_key.as_str().unwrap_or("").is_empty()
+                    ));
+                }
+            }
+        }
+    }
+    result
+}
+
 /// Get providers configuration
 async fn get_providers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(state.config.providers.clone())
+    let providers_json = serde_json::to_value(&state.config.providers).unwrap_or_default();
+    Json(redact_provider_api_keys(&providers_json))
 }
 
 /// Get models configuration
@@ -236,7 +291,7 @@ async fn get_config_json(State(state): State<Arc<AppState>>) -> impl IntoRespons
             "think": state.config.router.think,
             "websearch": state.config.router.websearch,
         },
-        "providers": state.config.providers,
+        "providers": redact_provider_api_keys(&serde_json::to_value(&state.config.providers).unwrap_or_default()),
         "models": state.config.models,
     }))
 }
@@ -400,7 +455,7 @@ while kill -0 {} 2>/dev/null; do
     sleep 0.1
 done
 # Start new server
-{} start --port {} > /dev/null 2>&1 &
+'{}' start --port {} > /dev/null 2>&1 &
 "#,
             current_pid,
             exe_path.display(),
