@@ -251,6 +251,7 @@ async fn update_config(
 }
 
 /// Redact api_key values in provider configs before sending to clients.
+/// Replaces actual keys with a boolean indicating whether a key is set.
 fn redact_provider_api_keys(providers: &serde_json::Value) -> serde_json::Value {
     let mut result = providers.clone();
     if let Some(arr) = result.as_array_mut() {
@@ -280,6 +281,7 @@ async fn get_models_config(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// Get full configuration as JSON (for admin UI)
 async fn get_config_json(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let providers_json = serde_json::to_value(&state.config.providers).unwrap_or_default();
     Json(serde_json::json!({
         "server": {
             "host": state.config.server.host,
@@ -291,7 +293,7 @@ async fn get_config_json(State(state): State<Arc<AppState>>) -> impl IntoRespons
             "think": state.config.router.think,
             "websearch": state.config.router.websearch,
         },
-        "providers": redact_provider_api_keys(&serde_json::to_value(&state.config.providers).unwrap_or_default()),
+        "providers": redact_provider_api_keys(&providers_json),
         "models": state.config.models,
     }))
 }
@@ -997,3 +999,69 @@ impl std::fmt::Display for AppError {
 }
 
 impl std::error::Error for AppError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_redact_provider_api_keys_with_key_set() {
+        let providers = serde_json::json!([
+            {"name": "test", "api_key": "secret123"}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        let obj = &result[0];
+        assert!(obj.get("api_key").is_none(), "api_key should be removed");
+        assert_eq!(obj["api_key_set"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_with_empty_key() {
+        let providers = serde_json::json!([
+            {"name": "test", "api_key": ""}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        assert_eq!(result[0]["api_key_set"], serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_with_null_key() {
+        let providers = serde_json::json!([
+            {"name": "test", "api_key": null}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        assert_eq!(result[0]["api_key_set"], serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_no_key_field() {
+        let providers = serde_json::json!([
+            {"name": "test"}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        // No api_key field, so no api_key_set field added
+        assert!(result[0].get("api_key").is_none());
+        assert!(result[0].get("api_key_set").is_none());
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_multiple_providers() {
+        let providers = serde_json::json!([
+            {"name": "p1", "api_key": "secret1"},
+            {"name": "p2", "api_key": ""},
+            {"name": "p3"},
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        assert_eq!(result[0]["api_key_set"], serde_json::Value::Bool(true));
+        assert_eq!(result[1]["api_key_set"], serde_json::Value::Bool(false));
+        assert!(result[2].get("api_key_set").is_none());
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_non_array_input_unchanged() {
+        let non_array = serde_json::json!({"api_key": "secret"});
+        let result = redact_provider_api_keys(&non_array);
+        // Non-array input passes through unchanged
+        assert_eq!(result["api_key"], "secret");
+    }
+}
