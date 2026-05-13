@@ -90,6 +90,12 @@ pub async fn poll_github_token_once(
         .send()
         .await?;
 
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("GitHub token poll failed ({status}): {body}");
+    }
+
     let token_resp: GitHubAccessTokenResponse = response.json().await?;
 
     match token_resp.error.as_deref() {
@@ -102,7 +108,7 @@ pub async fn poll_github_token_once(
         }
         Some("authorization_pending") => Ok((PollResult::Pending, interval)),
         Some("slow_down") => {
-            let new_interval = interval + 5;
+            let new_interval = token_resp.interval.unwrap_or(interval + 5).min(30);
             Ok((PollResult::Pending, new_interval))
         }
         Some("expired_token") => Ok((PollResult::Expired, interval)),
@@ -151,6 +157,7 @@ pub async fn refresh_copilot_token(client: &Client, github_token: &str) -> Resul
 /// Parse the `proxy-ep` field from a semicolon-delimited Copilot bearer token.
 /// Returns `https://api.<rest>` for tokens containing `proxy-ep=proxy.<rest>`,
 /// or the fallback URL if the field is absent.
+/// Rejects proxy-ep values that don't end with `.githubcopilot.com` to prevent SSRF.
 pub fn parse_proxy_ep(bearer: &str) -> String {
     for field in bearer.split(';') {
         if let Some(val) = field.strip_prefix("proxy-ep=") {
@@ -158,6 +165,13 @@ pub fn parse_proxy_ep(bearer: &str) -> String {
                 .strip_prefix("proxy.")
                 .map(|s| format!("api.{}", s))
                 .unwrap_or_else(|| val.to_string());
+
+            // SSRF guard: only allow *.githubcopilot.com hosts
+            if !api_host.ends_with(".githubcopilot.com") {
+                tracing::warn!("Rejected proxy-ep with unexpected host: {}", api_host);
+                return COPILOT_FALLBACK_BASE_URL.to_string();
+            }
+
             return format!("https://{}", api_host);
         }
     }
@@ -209,8 +223,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_proxy_ep_no_proxy_prefix_passthrough() {
+    fn test_parse_proxy_ep_no_proxy_prefix_rejected() {
         let bearer = "tid=abc;proxy-ep=custom.endpoint.com";
-        assert_eq!(parse_proxy_ep(bearer), "https://custom.endpoint.com");
+        assert_eq!(parse_proxy_ep(bearer), COPILOT_FALLBACK_BASE_URL);
+    }
+
+    #[test]
+    fn test_parse_proxy_ep_enterprise() {
+        let bearer = "tid=abc;proxy-ep=proxy.enterprise.githubcopilot.com;sku=enterprise";
+        assert_eq!(
+            parse_proxy_ep(bearer),
+            "https://api.enterprise.githubcopilot.com"
+        );
     }
 }

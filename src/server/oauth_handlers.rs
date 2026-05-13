@@ -273,6 +273,15 @@ pub struct OAuthCallbackQuery {
     pub error_description: Option<String>,
 }
 
+/// HTML-escape helper to prevent reflected XSS from query params
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// OAuth callback handler - displays the authorization code to the user
 pub async fn oauth_callback(
     Query(params): Query<OAuthCallbackQuery>,
@@ -280,6 +289,8 @@ pub async fn oauth_callback(
     // Check for errors
     if let Some(error) = params.error {
         let error_desc = params.error_description.unwrap_or_else(|| "Unknown error".to_string());
+        let error = html_escape(&error);
+        let error_desc = html_escape(&error_desc);
         return Html(format!(r#"
 <!DOCTYPE html>
 <html>
@@ -338,6 +349,7 @@ pub async fn oauth_callback(
 
     // Extract code (state is not used for token exchange, verifier is stored in frontend)
     let code = params.code.unwrap_or_else(|| "No code received".to_string());
+    let code = html_escape(&code);
 
     Html(format!(r#"
 <!DOCTYPE html>
@@ -535,6 +547,10 @@ pub async fn copilot_exchange(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CopilotExchangeRequest>,
 ) -> Result<Json<CopilotExchangeResponse>, (StatusCode, String)> {
+    // Validate that the provider_id exists in the registry as a copilot provider
+    let provider = state.provider_registry.get_provider(&req.provider_id);
+    if provider.is_none() {
+        return Err((StatusCode::BAD_REQUEST, format!("Provider '{}' not found in registry", req.provider_id)));
     }
 
     let client = Client::new();
@@ -551,7 +567,7 @@ pub async fn copilot_exchange(
             })?;
 
             let expires_at =
-                chrono::DateTime::from_timestamp(copilot_token.expires_at as i64, 0)
+                chrono::DateTime::from_timestamp(copilot_token.expires_at.min(i64::MAX as u64) as i64, 0)
                     .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
 
             let oauth_token = crate::auth::OAuthToken {

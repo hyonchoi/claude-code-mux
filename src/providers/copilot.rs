@@ -69,8 +69,8 @@ impl CopilotProvider {
                 ProviderError::AuthError(format!("Failed to refresh Copilot token: {}", e))
             })?;
 
-            let new_expires_at = chrono::DateTime::from_timestamp(copilot_resp.expires_at as i64, 0)
             let new_expires_at = chrono::DateTime::from_timestamp(
+                copilot_resp.expires_at.min(i64::MAX as u64) as i64, 0
             ).unwrap_or_else(|| Utc::now() + chrono::Duration::minutes(30));
 
             let updated_token = OAuthToken {

@@ -4212,7 +4212,9 @@
                         <li>Click "I've Authorized" below</li>
                     `;
 
-                    window.open(verification_uri, "GitHub Copilot Auth", "width=600,height=800");
+                    if (verification_uri.startsWith("https://")) {
+          window.open(verification_uri, "GitHub Copilot Auth", "width=600,height=800");
+        }
 
                     sessionStorage.setItem("copilot_device_code", device_code);
                     sessionStorage.setItem("copilot_provider_id", providerName);
