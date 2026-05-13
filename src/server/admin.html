@@ -2073,7 +2073,7 @@
             // Fetch config from server and save to localStorage (only on page load)
             async function loadConfig() {
                 try {
-                    const response = await fetch("/api/config/json");
+                    const response = await apiFetch("/api/config/json");
                     const config = await response.json();
                     appState.config = config;
                     appState.loaded = true;
@@ -2096,7 +2096,7 @@
                     );
                     console.log("Full config being sent:", appState.config);
 
-                    const response = await fetch("/api/config/json", {
+                    const response = await apiFetch("/api/config/json", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify(appState.config),
@@ -3481,7 +3481,7 @@
                     return;
 
                 try {
-                    await fetch("/api/restart", { method: "POST" });
+                    await apiFetch("/api/restart", { method: "POST" });
                     notifySuccess("Server restarted");
                 } catch (error) {
                     console.error("Failed to restart server:", error);
@@ -3521,7 +3521,7 @@
                 try {
                     await saveAllConfig();
                     setTimeout(async () => {
-                        await fetch("/api/restart", { method: "POST" });
+                        await apiFetch("/api/restart", { method: "POST" });
                         notifySuccess("Server restarted");
                     }, 500);
                 } catch (error) {
@@ -3674,7 +3674,7 @@
                         headers["X-Provider"] = provider;
                     }
 
-                    const response = await fetch("/v1/messages", {
+                    const response = await apiFetch("/v1/messages", {
                         method: "POST",
                         headers: headers,
                         body: JSON.stringify({
@@ -3966,7 +3966,7 @@
                 const emptyEl = document.getElementById("oauth-tokens-empty");
 
                 try {
-                    const response = await fetch("/api/oauth/tokens");
+                    const response = await apiFetch("/api/oauth/tokens");
                     if (!response.ok) {
                         throw new Error("Failed to load OAuth tokens");
                     }
@@ -4031,7 +4031,7 @@
 
             async function refreshOAuthToken(providerId) {
                 try {
-                    const response = await fetch("/api/oauth/tokens/refresh", {
+                    const response = await apiFetch("/api/oauth/tokens/refresh", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ provider_id: providerId }),
@@ -4059,7 +4059,7 @@
                 }
 
                 try {
-                    const response = await fetch("/api/oauth/tokens/delete", {
+                    const response = await apiFetch("/api/oauth/tokens/delete", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ provider_id: providerId }),
@@ -4112,7 +4112,7 @@
                     }
 
                     // Step 1: Get authorization URL
-                    const response = await fetch("/api/oauth/authorize", {
+                    const response = await apiFetch("/api/oauth/authorize", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ oauth_type }),
@@ -4191,7 +4191,7 @@
                     document.querySelector('input[name="provider_name"]')?.value || "copilot";
 
                 try {
-                    const response = await fetch("/api/oauth/copilot-start", {
+                    const response = await apiFetch("/api/oauth/copilot-start", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ provider_id: providerName }),
@@ -4251,7 +4251,7 @@
 
                 while (Date.now() < expiresAt) {
                     try {
-                        const response = await fetch("/api/oauth/copilot-exchange", {
+                        const response = await apiFetch("/api/oauth/copilot-exchange", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
