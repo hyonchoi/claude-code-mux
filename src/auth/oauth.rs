@@ -411,7 +411,7 @@ impl OAuthClient {
         // Debug: Log the raw response body
         let response_text = response.text().await
             .context("Failed to read response body")?;
-        tracing::debug!("🔍 Token refresh response body: {}", response_text);
+        tracing::debug!("Token refresh response: {} bytes", response_text.len());
 
         let token_response: TokenResponse = serde_json::from_str(&response_text)
             .context("Failed to parse token response")?;
@@ -499,7 +499,7 @@ impl OAuthClient {
         let response_text = response.text().await
             .context("Failed to read loadCodeAssist response")?;
 
-        tracing::debug!("📥 loadCodeAssist API response: {}", response_text);
+        tracing::debug!("loadCodeAssist API response: {} bytes", response_text.len());
 
         let load_response: LoadCodeAssistResponse = serde_json::from_str(&response_text)
             .context("Failed to parse loadCodeAssist response")?;
