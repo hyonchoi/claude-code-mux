@@ -4,6 +4,7 @@ pub mod anthropic_compatible;
 pub mod gemini;
 pub mod registry;
 pub mod streaming;
+pub mod copilot;
 
 use async_trait::async_trait;
 use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse, ContentBlock};
@@ -137,3 +138,4 @@ impl ProviderConfig {
 pub use openai::OpenAIProvider;
 pub use anthropic_compatible::AnthropicCompatibleProvider;
 pub use registry::ProviderRegistry;
+pub use copilot::CopilotProvider;

@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
+use crate::auth::github_copilot::{
+    start_device_flow, poll_github_token_once, exchange_for_copilot_token, PollResult,
+};
+use reqwest::Client;
 
 use super::AppState;
 
@@ -269,6 +273,15 @@ pub struct OAuthCallbackQuery {
     pub error_description: Option<String>,
 }
 
+/// HTML-escape helper to prevent reflected XSS from query params
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// OAuth callback handler - displays the authorization code to the user
 pub async fn oauth_callback(
     Query(params): Query<OAuthCallbackQuery>,
@@ -276,6 +289,8 @@ pub async fn oauth_callback(
     // Check for errors
     if let Some(error) = params.error {
         let error_desc = params.error_description.unwrap_or_else(|| "Unknown error".to_string());
+        let error = html_escape(&error);
+        let error_desc = html_escape(&error_desc);
         return Html(format!(r#"
 <!DOCTYPE html>
 <html>
@@ -334,6 +349,7 @@ pub async fn oauth_callback(
 
     // Extract code (state is not used for token exchange, verifier is stored in frontend)
     let code = params.code.unwrap_or_else(|| "No code received".to_string());
+    let code = html_escape(&code);
 
     Html(format!(r#"
 <!DOCTYPE html>
@@ -476,4 +492,161 @@ pub async fn oauth_callback(
 </body>
 </html>
 "#))
+}
+
+// ── Copilot device code flow ─────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CopilotStartRequest {
+    pub provider_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CopilotStartResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CopilotExchangeRequest {
+    pub provider_id: String,
+    pub device_code: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CopilotExchangeResponse {
+    pub status: String, // "success" | "pending" | "expired"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+}
+
+/// Start GitHub Copilot device code flow.
+pub async fn copilot_start(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CopilotStartRequest>,
+) -> Result<Json<CopilotStartResponse>, (StatusCode, String)> {
+    if !state.provider_registry.is_copilot_provider(&req.provider_id) {
+        return Err((StatusCode::BAD_REQUEST, format!("Provider '{}' is not a copilot-type provider", req.provider_id)));
+    }
+    let client = Client::new();
+    let device_resp = start_device_flow(&client).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start device flow: {}", e))
+    })?;
+
+    Ok(Json(CopilotStartResponse {
+        device_code: device_resp.device_code,
+        user_code: device_resp.user_code,
+        verification_uri: device_resp.verification_uri,
+        expires_in: device_resp.expires_in,
+        interval: device_resp.interval,
+    }))
+}
+
+/// Poll GitHub for device code authorization — one attempt per call; returns
+/// immediately with "pending" so the admin UI can control polling cadence.
+pub async fn copilot_exchange(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CopilotExchangeRequest>,
+) -> Result<Json<CopilotExchangeResponse>, (StatusCode, String)> {
+    // Validate that the provider_id exists and is a copilot-type provider
+    if !state.provider_registry.is_copilot_provider(&req.provider_id) {
+        return Err((StatusCode::BAD_REQUEST, format!("Provider '{}' is not a copilot-type provider", req.provider_id)));
+    }
+
+    let client = Client::new();
+    let (poll_result, _) = poll_github_token_once(&client, &req.device_code, 5)
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Polling error: {}", e))
+        })?;
+
+    match poll_result {
+        PollResult::Success(github_token) => {
+            let copilot_token = exchange_for_copilot_token(&client, &github_token).await.map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Copilot token exchange failed: {}", e))
+            })?;
+
+            let now_ts = chrono::Utc::now().timestamp() as u64;
+                let max_ts = now_ts + 86400;
+                let expires_ts = copilot_token.expires_at;
+                let expires_at = if expires_ts > now_ts && expires_ts <= max_ts {
+                    chrono::DateTime::from_timestamp(expires_ts as i64, 0)
+                        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30))
+                } else {
+                    tracing::warn!("Copilot token expires_at ({}) out of valid range, using 30min default", expires_ts);
+                    chrono::Utc::now() + chrono::Duration::minutes(30)
+                };
+
+            let oauth_token = crate::auth::OAuthToken {
+                provider_id: req.provider_id.clone(),
+                access_token: copilot_token.token,
+                refresh_token: github_token,
+                expires_at,
+                enterprise_url: None,
+                project_id: None,
+            };
+
+            state.token_store.save(oauth_token).map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save token: {}", e))
+            })?;
+
+            tracing::info!("Copilot authentication successful for '{}'", req.provider_id);
+
+            Ok(Json(CopilotExchangeResponse {
+                status: "success".to_string(),
+                provider_id: Some(req.provider_id),
+            }))
+        }
+        PollResult::Pending => Ok(Json(CopilotExchangeResponse {
+            status: "pending".to_string(),
+            provider_id: None,
+        })),
+        PollResult::Expired => Ok(Json(CopilotExchangeResponse {
+            status: "expired".to_string(),
+            provider_id: None,
+        })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_html_escape_ampersand() {
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+    }
+
+    #[test]
+    fn test_html_escape_less_than() {
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+    }
+
+    #[test]
+    fn test_html_escape_double_quote() {
+        assert_eq!(html_escape(r#"say "hi""#), "say &quot;hi&quot;");
+    }
+
+    #[test]
+    fn test_html_escape_single_quote() {
+        assert_eq!(html_escape("it's"), "it&#x27;s");
+    }
+
+    #[test]
+    fn test_html_escape_combined_xss_payload() {
+        let payload = r#"<img src=x onerror="alert('xss')">"#;
+        let escaped = html_escape(payload);
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
+        assert!(!escaped.contains('"'));
+        assert!(!escaped.contains('\''));
+    }
+
+    #[test]
+    fn test_html_escape_plain_text_unchanged() {
+        assert_eq!(html_escape("hello world 123"), "hello world 123");
+    }
 }

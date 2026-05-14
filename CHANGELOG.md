@@ -5,6 +5,40 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-13
+
+### Added
+- **GitHub Copilot provider** — use your GitHub Copilot subscription as an AI
+  backend via OAuth device code flow; supports GPT-4o, o3-mini, Claude Sonnet,
+  and other models exposed by the Copilot API
+- `github_copilot` auth module with device code flow, token polling, and automatic
+  Copilot token refresh using the stored GitHub OAuth token
+- `copilot-start` and `copilot-exchange` API endpoints for initiating and completing
+  the GitHub device code authorization flow
+- GitHub Copilot device code UI in the admin panel (one-click flow with polling)
+- Example config at `config/copilot.example.toml`
+
+### Changed
+- API key authentication middleware (`require_api_key`) now uses constant-time
+  comparison to prevent timing side-channel attacks; all protected routes require
+  the configured `server.api_key` when set
+- Admin UI `apiFetch()` wrapper automatically attaches `X-Api-Key` header from
+  session storage and prompts the user on 401 responses
+- Provider API keys are redacted (replaced with `api_key_set: bool`) in all admin
+  API responses; keys are no longer sent to the browser
+- Token data removed from debug logs; only response size is logged
+- OpenAI provider request/response types promoted to `pub(crate)` for reuse by
+  the Copilot provider
+
+### Fixed
+- Copilot token `expires_at` is now validated to be within a 24-hour window;
+  malformed values (zero, past, or far-future timestamps) fall back to a safe
+  30-minute default with a warning log
+- XSS in OAuth callback: `error`, `error_description`, and `code` query params
+  are HTML-escaped before rendering
+- SSRF protection: Copilot proxy endpoint is validated to end with
+  `.githubcopilot.com` before use; arbitrary endpoints are rejected
+
 ## [0.7.0] - 2026-05-05
 
 ### Added

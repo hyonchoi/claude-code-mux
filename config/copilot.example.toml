@@ -1,0 +1,44 @@
+# GitHub Copilot Provider Configuration Example
+# Authenticate via the admin UI — no API key needed.
+# base_url is derived from the bearer token at runtime — do not set it.
+
+[server]
+host = "127.0.0.1"
+port = 13456
+log_level = "info"
+
+[server.timeouts]
+api_timeout_ms = 600000
+connect_timeout_ms = 10000
+
+[router]
+default = "gpt-4o"
+think = "gpt-4o"
+websearch = "gpt-4o"
+background = "gpt-4o"
+
+# GitHub Copilot provider (OAuth — no API key required)
+# Run the device code flow from the admin UI to authenticate.
+[[providers]]
+name = "copilot"
+provider_type = "copilot"
+auth_type = "oauth"
+oauth_provider = "copilot"
+enabled = true
+models = []
+
+[[models]]
+name = "gpt-4o"
+
+[[models.mappings]]
+actual_model = "gpt-4o"
+priority = 1
+provider = "copilot"
+
+[[models]]
+name = "claude-sonnet-4-5"
+
+[[models.mappings]]
+actual_model = "claude-sonnet-4-5-20250929"
+priority = 1
+provider = "copilot"

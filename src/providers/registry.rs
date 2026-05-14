@@ -13,6 +13,8 @@ pub struct ProviderRegistry {
     providers: HashMap<String, Arc<Box<dyn AnthropicProvider>>>,
     /// Map of model name -> provider name for fast lookup
     model_to_provider: HashMap<String, String>,
+    /// Map of provider name -> provider_type string for type validation
+    provider_types: HashMap<String, String>,
 }
 
 impl ProviderRegistry {
@@ -21,6 +23,7 @@ impl ProviderRegistry {
         Self {
             providers: HashMap::new(),
             model_to_provider: HashMap::new(),
+            provider_types: HashMap::new(),
         }
     }
 
@@ -248,6 +251,13 @@ impl ProviderRegistry {
                     ))
                 }
 
+                // GitHub Copilot (OAuth-based)
+                "copilot" => Box::new(crate::providers::CopilotProvider::new(
+                    config.name.clone(),
+                    config.models.clone(),
+                    token_store.clone(),
+                )),
+
                 other => {
                     return Err(ProviderError::ConfigError(format!(
                         "Unknown provider type: {}",
@@ -277,6 +287,7 @@ impl ProviderRegistry {
                 );
             }
 
+            registry.provider_types.insert(provider_name.clone(), config.provider_type.clone());
             registry.providers.insert(provider_name, Arc::new(provider));
         }
 
@@ -589,5 +600,31 @@ mod tests {
             response.content.as_slice(),
             [ContentBlock::Text { text }] if text == "nim ok"
         ));
+    }
+
+    #[test]
+    fn test_copilot_provider_registration() {
+        use crate::providers::{AuthType, ProviderConfig};
+
+        let config = ProviderConfig {
+            name: "my-copilot".to_string(),
+            provider_type: "copilot".to_string(),
+            auth_type: AuthType::OAuth,
+            oauth_provider: Some("my-copilot".to_string()),
+            api_key: None,
+            base_url: None,
+            project_id: None,
+            location: None,
+            models: vec!["gpt-4o".to_string()],
+            enabled: Some(true),
+            supported_beta_options: vec![],
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("my-copilot").is_some());
     }
 }

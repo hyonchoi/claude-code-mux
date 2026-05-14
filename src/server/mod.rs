@@ -8,18 +8,62 @@ use crate::providers::ProviderRegistry;
 use crate::router::Router;
 use axum::{
     extract::State,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, Request, StatusCode},
+    middleware::{self, Next},
     response::{
         sse::{Event, Sse},
         Html, IntoResponse, Response,
     },
     routing::{get, post},
     Form, Json, Router as AxumRouter,
+    body::Body,
 };
 use futures::stream::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+
+/// Constant-time byte comparison to prevent timing side-channel attacks on API keys.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
+/// Middleware that enforces the configured API key on protected routes.
+/// If server.api_key is set, requests must include it via X-Api-Key or Authorization: Bearer.
+/// If no api_key is configured, all requests are allowed (backwards compatible).
+async fn require_api_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if let Some(ref expected) = state.config.server.api_key {
+        let provided = headers
+            .get("x-api-key")
+            .map(|v| v.to_str().unwrap_or(""))
+            .or_else(|| {
+                headers.get("authorization").and_then(|v| {
+                    let s = v.to_str().ok()?;
+                    s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer "))
+                })
+            })
+            .unwrap_or("");
+
+        // Constant-time comparison to prevent timing side-channel attacks
+        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            warn!("Request rejected: invalid or missing API key for {}", request.uri().path());
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+    Ok(next.run(request).await)
+}
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -105,13 +149,18 @@ pub async fn start_server(
         config_path,
     });
 
-    // Build router
-    let app = AxumRouter::new()
+    // Build router — public routes (no auth required)
+    let public_routes = AxumRouter::new()
         .route("/", get(serve_admin))
+        .route("/health", get(health_check))
+        .route("/api/oauth/callback", get(oauth_handlers::oauth_callback))
+        .route("/auth/callback", get(oauth_handlers::oauth_callback));
+
+    // Protected routes (auth middleware applied when api_key is configured)
+    let protected_routes = AxumRouter::new()
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
         .route("/v1/chat/completions", post(handle_openai_chat_completions))
-        .route("/health", get(health_check))
         .route("/api/models", get(get_models))
         .route("/api/providers", get(get_providers))
         .route("/api/models-config", get(get_models_config))
@@ -126,8 +175,6 @@ pub async fn start_server(
             post(oauth_handlers::oauth_authorize),
         )
         .route("/api/oauth/exchange", post(oauth_handlers::oauth_exchange))
-        .route("/api/oauth/callback", get(oauth_handlers::oauth_callback))
-        .route("/auth/callback", get(oauth_handlers::oauth_callback)) // OpenAI Codex uses this path
         .route("/api/oauth/tokens", get(oauth_handlers::oauth_list_tokens))
         .route(
             "/api/oauth/tokens/delete",
@@ -136,11 +183,17 @@ pub async fn start_server(
         .route(
             "/api/oauth/tokens/refresh",
             post(oauth_handlers::oauth_refresh_token),
-        );
+        )
+        .route("/api/oauth/copilot-start", post(oauth_handlers::copilot_start))
+        .route("/api/oauth/copilot-exchange", post(oauth_handlers::copilot_exchange))
+        .layer(middleware::from_fn_with_state(state.clone(), require_api_key));
+
+    let app = public_routes
+        .merge(protected_routes)
+        .with_state(state.clone());
 
     // Clone state before moving it
-    let oauth_state = state.clone();
-    let app = app.with_state(state);
+    let oauth_state = state;
 
     // Bind to main address
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -273,9 +326,28 @@ async fn update_config(
     Ok(Html("<div class='px-4 py-3 rounded-xl bg-primary/20 border border-primary/50 text-foreground text-sm'>✅ Configuration saved successfully! Please restart the server to apply changes.</div>".to_string()))
 }
 
+/// Redact api_key values in provider configs before sending to clients.
+/// Replaces actual keys with a boolean indicating whether a key is set.
+fn redact_provider_api_keys(providers: &serde_json::Value) -> serde_json::Value {
+    let mut result = providers.clone();
+    if let Some(arr) = result.as_array_mut() {
+        for provider in arr.iter_mut() {
+            if let Some(obj) = provider.as_object_mut() {
+                if let Some(api_key) = obj.remove("api_key") {
+                    obj.insert("api_key_set".to_string(), serde_json::Value::Bool(
+                        !api_key.is_null() && !api_key.as_str().unwrap_or("").is_empty()
+                    ));
+                }
+            }
+        }
+    }
+    result
+}
+
 /// Get providers configuration
 async fn get_providers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(state.config.providers.clone())
+    let providers_json = serde_json::to_value(&state.config.providers).unwrap_or_default();
+    Json(redact_provider_api_keys(&providers_json))
 }
 
 /// Get models configuration
@@ -285,6 +357,7 @@ async fn get_models_config(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// Get full configuration as JSON (for admin UI)
 async fn get_config_json(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let providers_json = serde_json::to_value(&state.config.providers).unwrap_or_default();
     Json(serde_json::json!({
         "server": {
             "host": state.config.server.host,
@@ -296,7 +369,7 @@ async fn get_config_json(State(state): State<Arc<AppState>>) -> impl IntoRespons
             "think": state.config.router.think,
             "websearch": state.config.router.websearch,
         },
-        "providers": state.config.providers,
+        "providers": redact_provider_api_keys(&providers_json),
         "models": state.config.models,
     }))
 }
@@ -338,7 +411,38 @@ async fn update_config_json(
         .map_err(|e| AppError::ParseError(format!("Failed to parse config: {}", e)))?;
 
     // Update providers section
-    if let Some(providers) = new_config.get("providers") {
+    if let Some(providers) = new_config.get_mut("providers") {
+        // Restore redacted api_keys: the GET endpoint replaces api_key with api_key_set
+        // (a boolean). When saving back, strip api_key_set and restore the actual key
+        // from the current config for any provider where it was redacted.
+        if let Some(arr) = providers.as_array_mut() {
+            let current_providers = config.get("providers");
+            for provider in arr.iter_mut() {
+                if let Some(obj) = provider.as_object_mut() {
+                    let api_key_set = obj.remove("api_key_set");
+                    if matches!(api_key_set, Some(serde_json::Value::Bool(true)))
+                        && !obj.contains_key("api_key")
+                    {
+                        // Find the matching provider in the current config and restore its key
+                        if let Some(name) = obj.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()) {
+                            if let Some(toml::Value::Array(current_arr)) = current_providers {
+                                for current in current_arr {
+                                    if let toml::Value::Table(t) = current {
+                                        if t.get("name").and_then(|v| v.as_str()) == Some(&name) {
+                                            if let Some(toml::Value::String(key)) = t.get("api_key") {
+                                                obj.insert("api_key".to_string(), serde_json::Value::String(key.clone()));
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Convert from serde_json::Value to toml::Value
         let providers_toml: toml::Value = serde_json::from_str(&providers.to_string())
             .map_err(|e| AppError::ParseError(format!("Failed to convert providers: {}", e)))?;
@@ -471,7 +575,7 @@ while kill -0 {} 2>/dev/null; do
     sleep 0.1
 done
 # Start new server
-{} start --port {} > /dev/null 2>&1 &
+'{}' start --port {} > /dev/null 2>&1 &
 "#,
             current_pid,
             exe_path.display(),
@@ -761,13 +865,16 @@ async fn handle_openai_chat_completions(
         }
 
         if passthrough_token.is_some() {
-            sorted_mappings
-                .retain(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider));
-            if sorted_mappings.is_empty() {
-                return Err(AppError::RoutingError(
-                    "No passthrough-capable provider mappings available for this request"
-                        .to_string(),
-                ));
+            let pt_capable: Vec<_> = sorted_mappings
+                .iter()
+                .filter(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider))
+                .cloned()
+                .collect();
+            if pt_capable.is_empty() {
+                warn!("🔑 No passthrough-capable providers available — continuing without passthrough bearer");
+                anthropic_request.passthrough_auth = None;
+            } else {
+                sorted_mappings = pt_capable;
             }
         }
 
@@ -1014,15 +1121,20 @@ async fn handle_messages(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
-        // In passthrough mode, restrict to anthropic-type providers only
+        // In passthrough mode, restrict to anthropic-type providers only; fall back
+        // gracefully if none are available (e.g. only OAuth providers configured).
+        let mut effective_passthrough = passthrough_token.clone();
         if passthrough_token.is_some() {
-            sorted_mappings
-                .retain(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider));
-            if sorted_mappings.is_empty() {
-                return Err(AppError::RoutingError(
-                    "No passthrough-capable provider mappings available for this request"
-                        .to_string(),
-                ));
+            let pt_capable: Vec<_> = sorted_mappings
+                .iter()
+                .filter(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider))
+                .cloned()
+                .collect();
+            if pt_capable.is_empty() {
+                warn!("🔑 No passthrough-capable providers available — continuing without passthrough bearer");
+                effective_passthrough = None;
+            } else {
+                sorted_mappings = pt_capable;
             }
         }
 
@@ -1056,7 +1168,7 @@ async fn handle_messages(
                 // Propagate passthrough auth and beta header before stripping, so the
                 // strip logic can see the actual header value (anthropic_beta_header is
                 // #[serde(skip)] and therefore always None after JSON deserialization)
-                anthropic_request.passthrough_auth = passthrough_token.clone();
+                anthropic_request.passthrough_auth = effective_passthrough.clone();
                 anthropic_request.anthropic_beta_header = incoming_beta_header.clone();
 
                 // Strip beta options if configured in the mapping
@@ -1310,13 +1422,16 @@ async fn handle_count_tokens(
         sorted_mappings.sort_by_key(|m| m.priority);
 
         if passthrough_token.is_some() {
-            sorted_mappings
-                .retain(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider));
-            if sorted_mappings.is_empty() {
-                return Err(AppError::RoutingError(
-                    "No passthrough-capable provider mappings available for this request"
-                        .to_string(),
-                ));
+            let pt_capable: Vec<_> = sorted_mappings
+                .iter()
+                .filter(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider))
+                .cloned()
+                .collect();
+            if pt_capable.is_empty() {
+                warn!("🔑 No passthrough-capable providers available — continuing without passthrough bearer");
+                routing_request.passthrough_auth = None;
+            } else {
+                sorted_mappings = pt_capable;
             }
         }
 
@@ -1518,7 +1633,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_anthropic_compatible_provider;
+    use super::*;
     use crate::providers::ProviderConfig;
 
     fn make_configs() -> Vec<ProviderConfig> {
@@ -1792,5 +1907,86 @@ mod tests {
         );
         let token = super::extract_bearer_token(&headers);
         assert_eq!(token, None);
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_with_key_set() {
+        let providers = serde_json::json!([
+            {"name": "test", "api_key": "secret123"}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        let obj = &result[0];
+        assert!(obj.get("api_key").is_none(), "api_key should be removed");
+        assert_eq!(obj["api_key_set"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_with_empty_key() {
+        let providers = serde_json::json!([
+            {"name": "test", "api_key": ""}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        assert_eq!(result[0]["api_key_set"], serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_with_null_key() {
+        let providers = serde_json::json!([
+            {"name": "test", "api_key": null}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        assert_eq!(result[0]["api_key_set"], serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_no_key_field() {
+        let providers = serde_json::json!([
+            {"name": "test"}
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        // No api_key field, so no api_key_set field added
+        assert!(result[0].get("api_key").is_none());
+        assert!(result[0].get("api_key_set").is_none());
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_multiple_providers() {
+        let providers = serde_json::json!([
+            {"name": "p1", "api_key": "secret1"},
+            {"name": "p2", "api_key": ""},
+            {"name": "p3"},
+        ]);
+        let result = redact_provider_api_keys(&providers);
+        assert_eq!(result[0]["api_key_set"], serde_json::Value::Bool(true));
+        assert_eq!(result[1]["api_key_set"], serde_json::Value::Bool(false));
+        assert!(result[2].get("api_key_set").is_none());
+    }
+
+    #[test]
+    fn test_redact_provider_api_keys_non_array_input_unchanged() {
+        let non_array = serde_json::json!({"api_key": "secret"});
+        let result = redact_provider_api_keys(&non_array);
+        // Non-array input passes through unchanged
+        assert_eq!(result["api_key"], "secret");
+    }
+
+    #[test]
+    fn test_constant_time_eq_equal() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_not_equal() {
+        assert!(!constant_time_eq(b"hello", b"world"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"short", b"much_longer"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
     }
 }
