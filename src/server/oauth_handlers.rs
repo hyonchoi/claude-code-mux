@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
 use crate::auth::github_copilot::{
-    start_device_flow, poll_for_github_token, exchange_for_copilot_token, PollResult,
+    start_device_flow, poll_github_token_once, exchange_for_copilot_token, PollResult,
 };
 use reqwest::Client;
 
@@ -545,7 +545,8 @@ pub async fn copilot_start(
     }))
 }
 
-/// Poll GitHub for device code authorization. Hard 60-second timeout per call.
+/// Poll GitHub for device code authorization — one attempt per call; returns
+/// immediately with "pending" so the admin UI can control polling cadence.
 pub async fn copilot_exchange(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CopilotExchangeRequest>,
@@ -556,7 +557,7 @@ pub async fn copilot_exchange(
     }
 
     let client = Client::new();
-    let poll_result = poll_for_github_token(&client, &req.device_code, 5, 60)
+    let (poll_result, _) = poll_github_token_once(&client, &req.device_code, 5)
         .await
         .map_err(|e| {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Polling error: {}", e))

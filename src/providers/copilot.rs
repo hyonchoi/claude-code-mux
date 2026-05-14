@@ -129,6 +129,25 @@ impl AnthropicProvider for CopilotProvider {
         let response = req_builder.json(&openai_request).send().await
             .map_err(ProviderError::HttpError)?;
 
+        // On 401, refresh the token once and retry — handles the race between
+        // the token validity check and the actual API call.
+        let response = if response.status() == 401 {
+            tracing::info!("Copilot token rejected (401), refreshing and retrying");
+            let fresh_bearer = self.get_valid_copilot_token().await?;
+            let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
+            let mut retry_builder = self.client
+                .post(&fresh_url)
+                .header("Authorization", format!("Bearer {}", fresh_bearer))
+                .header("Content-Type", "application/json");
+            for (key, value) in COPILOT_HEADERS {
+                retry_builder = retry_builder.header(*key, *value);
+            }
+            retry_builder.json(&openai_request).send().await
+                .map_err(ProviderError::HttpError)?
+        } else {
+            response
+        };
+
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
@@ -167,6 +186,25 @@ impl AnthropicProvider for CopilotProvider {
 
         let response = req_builder.json(&openai_request).send().await
             .map_err(ProviderError::HttpError)?;
+
+        // On 401, refresh and retry once
+        let response = if response.status() == 401 {
+            tracing::info!("Copilot token rejected (401) in stream, refreshing and retrying");
+            let fresh_bearer = self.get_valid_copilot_token().await?;
+            let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
+            let mut retry_builder = self.client
+                .post(&fresh_url)
+                .header("Authorization", format!("Bearer {}", fresh_bearer))
+                .header("Content-Type", "application/json")
+                .header("accept", "text/event-stream");
+            for (key, value) in COPILOT_HEADERS {
+                retry_builder = retry_builder.header(*key, *value);
+            }
+            retry_builder.json(&openai_request).send().await
+                .map_err(ProviderError::HttpError)?
+        } else {
+            response
+        };
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
