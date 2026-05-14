@@ -496,11 +496,6 @@ pub async fn oauth_callback(
 
 // ── Copilot device code flow ─────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-pub struct CopilotStartRequest {
-    pub provider_id: String,
-}
-
 #[derive(Debug, Serialize)]
 pub struct CopilotStartResponse {
     pub device_code: String,
@@ -524,13 +519,7 @@ pub struct CopilotExchangeResponse {
 }
 
 /// Start GitHub Copilot device code flow.
-pub async fn copilot_start(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<CopilotStartRequest>,
-) -> Result<Json<CopilotStartResponse>, (StatusCode, String)> {
-    if !state.provider_registry.is_copilot_provider(&req.provider_id) {
-        return Err((StatusCode::BAD_REQUEST, format!("Provider '{}' is not a copilot-type provider", req.provider_id)));
-    }
+pub async fn copilot_start() -> Result<Json<CopilotStartResponse>, (StatusCode, String)> {
     let client = Client::new();
     let device_resp = start_device_flow(&client).await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start device flow: {}", e))
@@ -551,11 +540,6 @@ pub async fn copilot_exchange(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CopilotExchangeRequest>,
 ) -> Result<Json<CopilotExchangeResponse>, (StatusCode, String)> {
-    // Validate that the provider_id exists and is a copilot-type provider
-    if !state.provider_registry.is_copilot_provider(&req.provider_id) {
-        return Err((StatusCode::BAD_REQUEST, format!("Provider '{}' is not a copilot-type provider", req.provider_id)));
-    }
-
     let client = Client::new();
     let (poll_result, _) = poll_github_token_once(&client, &req.device_code, 5)
         .await
