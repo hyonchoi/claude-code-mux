@@ -157,14 +157,17 @@ pub async fn refresh_copilot_token(client: &Client, github_token: &str) -> Resul
 /// Parse the `proxy-ep` field from a semicolon-delimited Copilot bearer token.
 /// Returns `https://api.<rest>` for tokens containing `proxy-ep=proxy.<rest>`,
 /// or the fallback URL if the field is absent.
-/// Rejects proxy-ep values that don't end with `.githubcopilot.com` to prevent SSRF.
+/// Rejects proxy-ep values that don't start with `proxy.` and end with `.githubcopilot.com`.
 pub fn parse_proxy_ep(bearer: &str) -> String {
     for field in bearer.split(';') {
         if let Some(val) = field.strip_prefix("proxy-ep=") {
-            let api_host = val
-                .strip_prefix("proxy.")
-                .map(|s| format!("api.{}", s))
-                .unwrap_or_else(|| val.to_string());
+            // Only accept values starting with "proxy." to close the SSRF bypass where
+            // values like "evil.githubcopilot.com" passed the ends_with check.
+            let Some(rest) = val.strip_prefix("proxy.") else {
+                tracing::warn!("Rejected proxy-ep without 'proxy.' prefix: {}", val);
+                return COPILOT_FALLBACK_BASE_URL.to_string();
+            };
+            let api_host = format!("api.{}", rest);
 
             // SSRF guard: only allow *.githubcopilot.com hosts
             if !api_host.ends_with(".githubcopilot.com") {
@@ -225,6 +228,13 @@ mod tests {
     #[test]
     fn test_parse_proxy_ep_no_proxy_prefix_rejected() {
         let bearer = "tid=abc;proxy-ep=custom.endpoint.com";
+        assert_eq!(parse_proxy_ep(bearer), COPILOT_FALLBACK_BASE_URL);
+    }
+
+    #[test]
+    fn test_parse_proxy_ep_ssrf_bypass_rejected() {
+        // "evil.githubcopilot.com" ends with ".githubcopilot.com" but lacks "proxy." prefix
+        let bearer = "tid=abc;proxy-ep=evil.githubcopilot.com";
         assert_eq!(parse_proxy_ep(bearer), COPILOT_FALLBACK_BASE_URL);
     }
 

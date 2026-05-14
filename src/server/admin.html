@@ -4343,7 +4343,7 @@ async function apiFetch(url, options = {}) {
                     );
                     console.log("🔐 Provider ID:", providerId);
 
-                    const exchangeResponse = await fetch(
+                    const exchangeResponse = await apiFetch(
                         "/api/oauth/exchange",
                         {
                             method: "POST",

@@ -10,6 +10,8 @@ pub struct ProviderRegistry {
     providers: HashMap<String, Arc<Box<dyn AnthropicProvider>>>,
     /// Map of model name -> provider name for fast lookup
     model_to_provider: HashMap<String, String>,
+    /// Map of provider name -> provider_type string for type validation
+    provider_types: HashMap<String, String>,
 }
 
 impl ProviderRegistry {
@@ -18,6 +20,7 @@ impl ProviderRegistry {
         Self {
             providers: HashMap::new(),
             model_to_provider: HashMap::new(),
+            provider_types: HashMap::new(),
         }
     }
 
@@ -198,6 +201,7 @@ impl ProviderRegistry {
 
             // Add provider to registry
             registry.providers.insert(config.name.clone(), Arc::new(provider));
+            registry.provider_types.insert(config.name.clone(), config.provider_type.clone());
         }
 
         Ok(registry)
@@ -206,6 +210,11 @@ impl ProviderRegistry {
     /// Get a provider by name
     pub fn get_provider(&self, name: &str) -> Option<Arc<Box<dyn AnthropicProvider>>> {
         self.providers.get(name).cloned()
+    }
+
+    /// Returns true if the named provider has provider_type == "copilot"
+    pub fn is_copilot_provider(&self, name: &str) -> bool {
+        self.provider_types.get(name).map(|t| t == "copilot").unwrap_or(false)
     }
 
     /// Get a provider for a specific model
