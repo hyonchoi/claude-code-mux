@@ -117,6 +117,14 @@ impl AnthropicProvider for CopilotProvider {
         let delegate = Self::make_delegate();
         let openai_request = delegate.transform_request(&request)?;
 
+        let mut json_body = serde_json::to_value(&openai_request)
+            .map_err(|e| ProviderError::ApiError { status: 500, message: e.to_string() })?;
+        if request.model == "auto" {
+            if let serde_json::Value::Object(ref mut map) = json_body {
+                map.remove("model");
+            }
+        }
+
         let mut req_builder = self.client
             .post(&url)
             .header("Authorization", format!("Bearer {}", bearer))
@@ -126,7 +134,7 @@ impl AnthropicProvider for CopilotProvider {
             req_builder = req_builder.header(*key, *value);
         }
 
-        let response = req_builder.json(&openai_request).send().await
+        let response = req_builder.json(&json_body).send().await
             .map_err(ProviderError::HttpError)?;
 
         // On 401, refresh the token once and retry — handles the race between
@@ -142,7 +150,7 @@ impl AnthropicProvider for CopilotProvider {
             for (key, value) in COPILOT_HEADERS {
                 retry_builder = retry_builder.header(*key, *value);
             }
-            retry_builder.json(&openai_request).send().await
+            retry_builder.json(&json_body).send().await
                 .map_err(ProviderError::HttpError)?
         } else {
             response
@@ -174,6 +182,14 @@ impl AnthropicProvider for CopilotProvider {
         let delegate = Self::make_delegate();
         let openai_request = delegate.transform_request(&request)?;
 
+        let mut json_body = serde_json::to_value(&openai_request)
+            .map_err(|e| ProviderError::ApiError { status: 500, message: e.to_string() })?;
+        if request.model == "auto" {
+            if let serde_json::Value::Object(ref mut map) = json_body {
+                map.remove("model");
+            }
+        }
+
         let mut req_builder = self.client
             .post(&url)
             .header("Authorization", format!("Bearer {}", bearer))
@@ -184,7 +200,7 @@ impl AnthropicProvider for CopilotProvider {
             req_builder = req_builder.header(*key, *value);
         }
 
-        let response = req_builder.json(&openai_request).send().await
+        let response = req_builder.json(&json_body).send().await
             .map_err(ProviderError::HttpError)?;
 
         // On 401, refresh and retry once
@@ -200,7 +216,7 @@ impl AnthropicProvider for CopilotProvider {
             for (key, value) in COPILOT_HEADERS {
                 retry_builder = retry_builder.header(*key, *value);
             }
-            retry_builder.json(&openai_request).send().await
+            retry_builder.json(&json_body).send().await
                 .map_err(ProviderError::HttpError)?
         } else {
             response
