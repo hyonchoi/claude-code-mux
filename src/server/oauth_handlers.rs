@@ -566,9 +566,16 @@ pub async fn copilot_exchange(
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Copilot token exchange failed: {}", e))
             })?;
 
-            let expires_at =
-                chrono::DateTime::from_timestamp(copilot_token.expires_at.min(i64::MAX as u64) as i64, 0)
-                    .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
+            let now_ts = chrono::Utc::now().timestamp() as u64;
+                let max_ts = now_ts + 86400;
+                let expires_ts = copilot_token.expires_at;
+                let expires_at = if expires_ts > now_ts && expires_ts <= max_ts {
+                    chrono::DateTime::from_timestamp(expires_ts as i64, 0)
+                        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30))
+                } else {
+                    tracing::warn!("Copilot token expires_at ({}) out of valid range, using 30min default", expires_ts);
+                    chrono::Utc::now() + chrono::Duration::minutes(30)
+                };
 
             let oauth_token = crate::auth::OAuthToken {
                 provider_id: req.provider_id.clone(),

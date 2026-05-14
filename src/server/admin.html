@@ -2005,6 +2005,24 @@
         </div>
 
         <script>
+// Authenticated fetch wrapper — attaches API key from sessionStorage
+// and prompts the user if the key is missing or rejected.
+async function apiFetch(url, options = {}) {
+  const apiKey = sessionStorage.getItem("ccm_api_key") || "";
+  const headers = { ...(options.headers || {}) };
+  if (apiKey) headers["X-Api-Key"] = apiKey;
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    const key = prompt("API key required. Enter your server API key:");
+    if (key) {
+      sessionStorage.setItem("ccm_api_key", key);
+      headers["X-Api-Key"] = key;
+      return fetch(url, { ...options, headers });
+    }
+  }
+  return response;
+}
+
             // Global State
             const appState = {
                 config: null,

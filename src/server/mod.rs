@@ -22,6 +22,18 @@ use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 use futures::stream::StreamExt;
 
+/// Constant-time byte comparison to prevent timing side-channel attacks on API keys.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
 /// Middleware that enforces the configured API key on protected routes.
 /// If server.api_key is set, requests must include it via X-Api-Key or Authorization: Bearer.
 /// If no api_key is configured, all requests are allowed (backwards compatible).
@@ -43,7 +55,8 @@ async fn require_api_key(
             })
             .unwrap_or("");
 
-        if provided != expected {
+        // Constant-time comparison to prevent timing side-channel attacks
+        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
             warn!("Request rejected: invalid or missing API key for {}", request.uri().path());
             return Err(StatusCode::UNAUTHORIZED);
         }
@@ -1063,5 +1076,25 @@ mod tests {
         let result = redact_provider_api_keys(&non_array);
         // Non-array input passes through unchanged
         assert_eq!(result["api_key"], "secret");
+    }
+
+    #[test]
+    fn test_constant_time_eq_equal() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_not_equal() {
+        assert!(!constant_time_eq(b"hello", b"world"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"short", b"much_longer"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
     }
 }
