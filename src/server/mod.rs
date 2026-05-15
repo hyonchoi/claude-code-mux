@@ -21,7 +21,7 @@ use axum::{
 use futures::stream::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{debug, error, info, warn};
+use tracing::{trace, debug, error, info, warn};
 
 /// Constant-time byte comparison to prevent timing side-channel attacks on API keys.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -1019,7 +1019,7 @@ async fn handle_messages(
 
     // DEBUG: Log request body for debugging
     if let Ok(json_str) = serde_json::to_string_pretty(&request_json) {
-        tracing::debug!("📥 Incoming request body:\n{}", json_str);
+        trace!("📥 Incoming request body:\n{}", json_str);
     }
 
     // Extract and validate bearer token for passthrough mode.
