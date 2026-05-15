@@ -1318,6 +1318,7 @@
                                                     >
                                                         <button
                                                             type="button"
+                                                            id="oauth-complete-btn"
                                                             onclick="completeOAuthFlow()"
                                                             class="btn-primary flex-1"
                                                         >
@@ -4517,7 +4518,7 @@ async function apiFetch(url, options = {}) {
                         </li>
                         <li>Enter code: <strong class="font-mono text-lg bg-gray-100 px-2 py-1 rounded">${escapeHtml(user_code)}</strong></li>
                         <li>Log in to GitHub and authorize</li>
-                        <li>Click "I've Authorized" below</li>
+                        <li>Authorization will be detected automatically</li>
                     `;
 
                     if (verification_uri.startsWith("https://")) {
@@ -4531,7 +4532,9 @@ async function apiFetch(url, options = {}) {
                         String(Date.now() + expires_in * 1000),
                     );
 
-                    notifySuccess("Enter the code on GitHub, then click 'I\\'ve Authorized'.");
+                    document.getElementById("oauth-complete-btn").classList.add("hidden");
+                    notifySuccess("Enter the code on GitHub — authorization will be detected automatically.");
+                    completeCopilotFlow();
                 } catch (error) {
                     notifyError(`Failed to start Copilot auth: ${error.message}`);
                 }
@@ -4552,6 +4555,7 @@ async function apiFetch(url, options = {}) {
                     notifyError("Device code expired. Please start the flow again.");
                     document.getElementById("oauth-step-1").classList.remove("hidden");
                     document.getElementById("oauth-step-2").classList.add("hidden");
+                    document.getElementById("oauth-complete-btn").classList.remove("hidden");
                     return;
                 }
 
@@ -4583,6 +4587,7 @@ async function apiFetch(url, options = {}) {
                             notifyError("Device code expired. Please start the flow again.");
                             document.getElementById("oauth-step-1").classList.remove("hidden");
                             document.getElementById("oauth-step-2").classList.add("hidden");
+                            document.getElementById("oauth-complete-btn").classList.remove("hidden");
                             return;
                         }
                         // status === "pending": server already waited 60s, loop continues
@@ -4682,6 +4687,7 @@ async function apiFetch(url, options = {}) {
                     .getElementById("oauth-step-1")
                     .classList.remove("hidden");
                 document.getElementById("oauth-code-section").classList.remove("hidden");
+                document.getElementById("oauth-complete-btn").classList.remove("hidden");
                 document.getElementById("oauth-code-input").value = "";
                 sessionStorage.removeItem("oauth_verifier");
                 sessionStorage.removeItem("copilot_device_code");
