@@ -1301,6 +1301,7 @@
                                                             </li>
                                                         </ol>
                                                     </div>
+                                                    <div id="oauth-code-section">
                                                     <label class="label"
                                                         >Authorization
                                                         Code</label
@@ -1311,6 +1312,7 @@
                                                         class="input-field font-mono"
                                                         placeholder="Paste the code here..."
                                                     />
+                                                    </div>
                                                     <div
                                                         class="flex gap-2 mt-4"
                                                     >
@@ -4507,6 +4509,7 @@ async function apiFetch(url, options = {}) {
 
                     document.getElementById("oauth-step-1").classList.add("hidden");
                     document.getElementById("oauth-step-2").classList.remove("hidden");
+                    document.getElementById("oauth-code-section").classList.add("hidden");
                     document.getElementById("oauth-step2-instructions").innerHTML = `
                         <li>
                             Go to <a href="${escapeHtml(verification_uri)}" target="_blank"
@@ -4678,6 +4681,7 @@ async function apiFetch(url, options = {}) {
                 document
                     .getElementById("oauth-step-1")
                     .classList.remove("hidden");
+                document.getElementById("oauth-code-section").classList.remove("hidden");
                 document.getElementById("oauth-code-input").value = "";
                 sessionStorage.removeItem("oauth_verifier");
                 sessionStorage.removeItem("copilot_device_code");
