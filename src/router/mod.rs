@@ -91,16 +91,6 @@ impl Router {
         // Save original model for background task detection
         let original_model = request.model.clone();
 
-        // 0. Auto-mapping (model name transformation FIRST)
-        // Transform model name if it matches auto_map_regex
-        if let Some(ref regex) = self.auto_map_regex {
-            if regex.is_match(&request.model) {
-                let old = request.model.clone();
-                request.model = self.config.router.default.clone();
-                debug!("🔀 Auto-mapped model '{}' → '{}'", old, request.model);
-            }
-        }
-
         // 1. WebSearch (HIGHEST PRIORITY - tool-based detection)
         if let Some(ref websearch_model) = self.config.router.websearch {
             if self.has_web_search_tool(request) {
@@ -146,7 +136,17 @@ impl Router {
             }
         }
 
-        // 5. Default fallback
+        // 5. Auto-mapping (model name transformation FIRST)
+        // Transform model name if it matches auto_map_regex
+        if let Some(ref regex) = self.auto_map_regex {
+            if regex.is_match(&request.model) {
+                let old = request.model.clone();
+                request.model = self.config.router.default.clone();
+                debug!("🔀 Auto-mapped model '{}' → '{}'", old, request.model);
+            }
+        }
+
+        // 6. Default fallback
         // Use the transformed model name (from auto-mapping) or original if no mapping
         debug!("✅ Using model: {}", request.model);
         Ok(RouteDecision {
