@@ -143,6 +143,14 @@
             .fade-in {
                 animation: fadeIn 0.3s ease-out;
             }
+
+            /* Equal-height selection cards within each grid row */
+            .grid > label.cursor-pointer {
+                display: flex;
+            }
+            .grid > label.cursor-pointer > div {
+                flex: 1;
+            }
         </style>
     </head>
     <body>
@@ -931,7 +939,7 @@
                                                 GitHub Copilot
                                             </div>
                                             <div class="text-sm text-gray-600">
-                                                GPT-4o, Claude via Copilot subscription
+                                                GPT-4o, Claude via Copilot
                                             </div>
                                         </div>
                                     </label>
