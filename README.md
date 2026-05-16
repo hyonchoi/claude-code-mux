@@ -374,6 +374,7 @@ Configure routing rules (auto-saves on change!):
 - **Think Model**: `kimi-k2` (plan mode with reasoning - 256K context)
 - **Background Model**: `glm-4.5-air` (simple background tasks)
 - **WebSearch Model**: `glm-4.6` (web search tasks)
+- **Subagent Model**: (optional) override for subagent requests tagged with `<CCM-SUBAGENT-MODEL>`
 - **Auto-map Regex Pattern**: `^claude-` (transform Claude models before routing)
 - **Background Task Regex Pattern**: `(?i)claude.*haiku` (detect background tasks)
 
@@ -424,7 +425,7 @@ Navigate to **Test** tab:
 ### 2. Subagent Model
 - **Trigger**: System prompt contains `<CCM-SUBAGENT-MODEL>model-name</CCM-SUBAGENT-MODEL>` tag
 - **Example**: AI agent specifying model for sub-task
-- **Routes to**: Specified model (tag auto-removed)
+- **Routes to**: `router.subagent` model if configured (overrides the tag) — otherwise falls through with the tag's model name so think/background/default routing applies. Tag is always removed from the prompt.
 
 ### 3. Think Mode
 - **Trigger**: Request has `thinking` field with `type: "enabled"`

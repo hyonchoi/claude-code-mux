@@ -5,6 +5,16 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-05-15
+
+### Added
+- **Configurable Subagent Model** — set `router.subagent` in your config (or via the admin Router tab) to route all subagent requests to a specific model, overriding the model name embedded in the `<CCM-SUBAGENT-MODEL>` tag
+- Subagent Model dropdown added to the Router tab in the admin UI, matching the Think/Background/WebSearch pattern
+- `current-subagent` display added to the status overview card
+
+### Changed
+- Subagent routing now has two modes: when `router.subagent` is set, that model wins; when unset, the tag's model name falls through to think/background/auto-map/default routing as before — no behavior change for existing configs
+
 ## [0.8.0] - 2026-05-13
 
 ### Added
