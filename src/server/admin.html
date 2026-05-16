@@ -1747,17 +1747,17 @@
                             </select>
                         </div>
 
-        <div class="card">
-          <h2 class="text-xl font-bold mb-6">
-            Subagent Model
-          </h2>
-          <p class="text-gray-600 mb-6">
-            Model used for subagent requests (overrides CCM-SUBAGENT-MODEL tag)
-          </p>
-          <select name="subagent_model" class="input-field">
-            <option value="">Not configured</option>
-          </select>
-        </div>
+                        <div class="card">
+                            <h2 class="text-xl font-bold mb-6">
+                                Subagent Model
+                            </h2>
+                            <p class="text-gray-600 mb-6">
+                                Model used for subagent requests (overrides CCM-SUBAGENT-MODEL tag)
+                            </p>
+                            <select name="subagent_model" class="input-field">
+                                <option value="">Not configured</option>
+                            </select>
+                        </div>
                     </form>
                 </div>
 
@@ -3222,8 +3222,8 @@ async function apiFetch(url, options = {}) {
                     config.router.background || "Not configured";
                 document.getElementById("current-websearch").textContent =
                     config.router.websearch || "Not configured";
-document.getElementById("current-subagent").textContent =
-  config.router.subagent || "Not configured";
+                document.getElementById("current-subagent").textContent =
+                    config.router.subagent || "Not configured";
 
                 // Update server info
                 document.getElementById("server-address").textContent =
@@ -3253,6 +3253,8 @@ document.getElementById("current-subagent").textContent =
                     config.router.background || "";
                 document.querySelector('[name="websearch_model"]').value =
                     config.router.websearch || "";
+                document.querySelector('[name="subagent_model"]').value =
+                    config.router.subagent || "";
 
                 // Update Test tab models list
                 loadTestModels();
@@ -3345,15 +3347,15 @@ document.getElementById("current-subagent").textContent =
                                     formData.get("background_model");
                                 const websearchModel =
                                     formData.get("websearch_model");
-                const subagentModel =
-                  formData.get("subagent_model");
+                                const subagentModel =
+                                    formData.get("subagent_model");
 
                                 console.log("FormData values:", {
                                     default: defaultModel,
                                     think: thinkModel,
                                     background: backgroundModel,
                                     websearch: websearchModel,
-                    subagent: subagentModel,
+                                    subagent: subagentModel,
                                 });
 
                                 if (!defaultModel) return; // Skip if required field is empty
@@ -3382,11 +3384,11 @@ document.getElementById("current-subagent").textContent =
                                 }
 
                                 if (subagentModel) {
-                  appState.config.router.subagent =
-                    subagentModel;
-                } else {
-                  delete appState.config.router.subagent;
-                }
+                                    appState.config.router.subagent =
+                                        subagentModel;
+                                } else {
+                                    delete appState.config.router.subagent;
+                                }
                                 console.log(
                                     "Updated appState.config.router:",
                                     appState.config.router,
