@@ -4531,6 +4531,7 @@ async function apiFetch(url, options = {}) {
                 sessionStorage.removeItem("copilot_device_code");
                 sessionStorage.removeItem("copilot_provider_id");
                 sessionStorage.removeItem("copilot_expires_at");
+                sessionStorage.removeItem("copilot_interval");
 
                 const providerName =
                     document.querySelector('input[name="provider_name"]')?.value || "copilot";
@@ -4545,7 +4546,7 @@ async function apiFetch(url, options = {}) {
                         const text = await response.text();
                         throw new Error(text || response.statusText || "Failed to start Copilot auth");
                     }
-                    const { user_code, verification_uri, device_code, expires_in } =
+                    const { user_code, verification_uri, device_code, expires_in, interval } =
                         await response.json();
 
                     document.getElementById("oauth-step-1").classList.add("hidden");
@@ -4571,6 +4572,7 @@ async function apiFetch(url, options = {}) {
                         "copilot_expires_at",
                         String(Date.now() + expires_in * 1000),
                     );
+                    sessionStorage.setItem("copilot_interval", String((interval || 5) * 1000));
 
                     document.getElementById("oauth-complete-btn").classList.add("hidden");
                     notifySuccess("Enter the code on GitHub — authorization will be detected automatically.");
@@ -4601,7 +4603,11 @@ async function apiFetch(url, options = {}) {
 
                 notifySuccess("Checking authorization...");
 
+                let pollIntervalMs = parseInt(sessionStorage.getItem("copilot_interval") || "5000");
+
                 while (Date.now() < expiresAt) {
+                    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                    if (Date.now() >= expiresAt) break;
                     try {
                         const response = await apiFetch("/api/oauth/copilot-exchange", {
                             method: "POST",
@@ -4630,7 +4636,10 @@ async function apiFetch(url, options = {}) {
                             document.getElementById("oauth-complete-btn").classList.remove("hidden");
                             return;
                         }
-                        // status === "pending": server already waited 60s, loop continues
+                        // pending — update interval if server signals slow_down
+                        if (data.next_poll_ms) {
+                            pollIntervalMs = data.next_poll_ms;
+                        }
                     } catch (error) {
                         notifyError(`Exchange failed: ${error.message}`);
                         return;
@@ -4733,6 +4742,7 @@ async function apiFetch(url, options = {}) {
                 sessionStorage.removeItem("copilot_device_code");
                 sessionStorage.removeItem("copilot_provider_id");
                 sessionStorage.removeItem("copilot_expires_at");
+                sessionStorage.removeItem("copilot_interval");
                 notifySuccess("OAuth flow canceled");
             }
 

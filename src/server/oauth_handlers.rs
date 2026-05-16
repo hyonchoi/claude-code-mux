@@ -516,6 +516,10 @@ pub struct CopilotExchangeResponse {
     pub status: String, // "success" | "pending" | "expired"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,
+    /// Milliseconds the client should wait before the next poll (mirrors GitHub's interval).
+    /// Only present on "pending" responses; absent on "success" and "expired".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_poll_ms: Option<u64>,
 }
 
 /// Start GitHub Copilot device code flow.
@@ -541,7 +545,7 @@ pub async fn copilot_exchange(
     Json(req): Json<CopilotExchangeRequest>,
 ) -> Result<Json<CopilotExchangeResponse>, (StatusCode, String)> {
     let client = Client::new();
-    let (poll_result, _) = poll_github_token_once(&client, &req.device_code, 5)
+    let (poll_result, updated_interval) = poll_github_token_once(&client, &req.device_code, 5)
         .await
         .map_err(|e| {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Polling error: {}", e))
@@ -582,15 +586,18 @@ pub async fn copilot_exchange(
             Ok(Json(CopilotExchangeResponse {
                 status: "success".to_string(),
                 provider_id: Some(req.provider_id),
+                next_poll_ms: None,
             }))
         }
         PollResult::Pending => Ok(Json(CopilotExchangeResponse {
             status: "pending".to_string(),
             provider_id: None,
+            next_poll_ms: Some(updated_interval * 1000),
         })),
         PollResult::Expired => Ok(Json(CopilotExchangeResponse {
             status: "expired".to_string(),
             provider_id: None,
+            next_poll_ms: None,
         })),
     }
 }
