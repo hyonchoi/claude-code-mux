@@ -312,13 +312,23 @@
                                     >-</span
                                 >
                             </div>
-                            <div class="flex justify-between items-center py-3">
+                            <div class="flex justify-between items-center py-3 border-b">
                                 <span class="text-gray-600"
                                     >WebSearch Model</span
                                 >
                                 <span
                                     class="font-semibold"
                                     id="current-websearch"
+                                    >-</span
+                                >
+                            </div>
+                            <div class="flex justify-between items-center py-3">
+                                <span class="text-gray-600"
+                                    >Subagent Model</span
+                                >
+                                <span
+                                    class="font-semibold"
+                                    id="current-subagent"
                                     >-</span
                                 >
                             </div>
@@ -1736,6 +1746,18 @@
                                 <option value="">Not configured</option>
                             </select>
                         </div>
+
+        <div class="card">
+          <h2 class="text-xl font-bold mb-6">
+            Subagent Model
+          </h2>
+          <p class="text-gray-600 mb-6">
+            Model used for subagent requests (overrides CCM-SUBAGENT-MODEL tag)
+          </p>
+          <select name="subagent_model" class="input-field">
+            <option value="">Not configured</option>
+          </select>
+        </div>
                     </form>
                 </div>
 
@@ -2369,6 +2391,9 @@ async function apiFetch(url, options = {}) {
                 const websearchSelect = document.querySelector(
                     '[name="websearch_model"]',
                 );
+                const subagentSelect = document.querySelector(
+                    '[name="subagent_model"]',
+                );
 
                 if (defaultSelect)
                     defaultSelect.value = config.router.default || "";
@@ -2377,6 +2402,8 @@ async function apiFetch(url, options = {}) {
                     backgroundSelect.value = config.router.background || "";
                 if (websearchSelect)
                     websearchSelect.value = config.router.websearch || "";
+                if (subagentSelect)
+                    subagentSelect.value = config.router.subagent || "";
             }
 
             function loadSettingsTab() {
@@ -3195,6 +3222,8 @@ async function apiFetch(url, options = {}) {
                     config.router.background || "Not configured";
                 document.getElementById("current-websearch").textContent =
                     config.router.websearch || "Not configured";
+document.getElementById("current-subagent").textContent =
+  config.router.subagent || "Not configured";
 
                 // Update server info
                 document.getElementById("server-address").textContent =
@@ -3316,12 +3345,15 @@ async function apiFetch(url, options = {}) {
                                     formData.get("background_model");
                                 const websearchModel =
                                     formData.get("websearch_model");
+                const subagentModel =
+                  formData.get("subagent_model");
 
                                 console.log("FormData values:", {
                                     default: defaultModel,
                                     think: thinkModel,
                                     background: backgroundModel,
                                     websearch: websearchModel,
+                    subagent: subagentModel,
                                 });
 
                                 if (!defaultModel) return; // Skip if required field is empty
@@ -3349,6 +3381,12 @@ async function apiFetch(url, options = {}) {
                                     delete appState.config.router.websearch;
                                 }
 
+                                if (subagentModel) {
+                  appState.config.router.subagent =
+                    subagentModel;
+                } else {
+                  delete appState.config.router.subagent;
+                }
                                 console.log(
                                     "Updated appState.config.router:",
                                     appState.config.router,
