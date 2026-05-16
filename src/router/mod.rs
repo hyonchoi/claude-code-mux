@@ -88,9 +88,6 @@ impl Router {
     /// Route an incoming request to the appropriate model
     /// Priority: websearch > subagent > think > background > auto-map > default
     pub fn route(&self, request: &mut AnthropicRequest) -> Result<RouteDecision> {
-        // Save original model for background task detection
-        let original_model = request.model.clone();
-
         // 1. WebSearch (HIGHEST PRIORITY - tool-based detection)
         if let Some(ref websearch_model) = self.config.router.websearch {
             if self.has_web_search_tool(request) {
@@ -103,16 +100,20 @@ impl Router {
         }
 
         // 2. Subagent Model (system prompt tag)
-        if let Some(model) = self.extract_subagent_model(request) {
+        if let Some(model) = self.handle_subagent_tag(request) {
             info!(
-                "🤖 Routing to subagent model (CCM-SUBAGENT-MODEL tag): {}",
+                "🤖 Routing to subagent model (CCM-SUBAGENT-MODEL tag, config override): {}",
                 model
             );
             return Ok(RouteDecision {
                 model_name: model,
-                route_type: RouteType::Default, // Using Default route type
+                route_type: RouteType::Default,
             });
         }
+
+        // Capture model name after subagent tag may have mutated it.
+        // Background detection uses this so the tag's model name is respected.
+        let original_model = request.model.clone();
 
         // 3. Think mode (Plan Mode / Reasoning)
         if let Some(ref think_model) = self.config.router.think {
@@ -125,7 +126,7 @@ impl Router {
             }
         }
 
-        // 4. Background tasks (check against ORIGINAL model name, before auto-mapping)
+        // 4. Background tasks (check against model name before auto-mapping)
         if let Some(ref background_model) = self.config.router.background {
             if self.is_background_task(&original_model) {
                 debug!("🔄 Routing to background model");
@@ -137,7 +138,6 @@ impl Router {
         }
 
         // 5. Auto-mapping (model name transformation FIRST)
-        // Transform model name if it matches auto_map_regex
         if let Some(ref regex) = self.auto_map_regex {
             if regex.is_match(&request.model) {
                 let old = request.model.clone();
@@ -147,7 +147,6 @@ impl Router {
         }
 
         // 6. Default fallback
-        // Use the transformed model name (from auto-mapping) or original if no mapping
         debug!("✅ Using model: {}", request.model);
         Ok(RouteDecision {
             model_name: request.model.clone(),
@@ -189,40 +188,39 @@ impl Router {
         }
     }
 
-    /// Extract subagent model from system prompt tag
-    /// Checks for <CCM-SUBAGENT-MODEL>model-name</CCM-SUBAGENT-MODEL> in system[1].text
-    /// and removes the tag after extraction
-    fn extract_subagent_model(&self, request: &mut AnthropicRequest) -> Option<String> {
-        // Check if system exists and is Blocks type with at least 2 blocks
+    /// Handle the CCM-SUBAGENT-MODEL tag in the system prompt.
+    ///
+    /// Returns Some(model) if router.subagent is configured (caller routes there).
+    /// Returns None if not configured — but mutates request.model with the tag's value
+    /// so routing falls through with the updated model name.
+    /// Returns None with no side effects if no tag is found.
+    fn handle_subagent_tag(&self, request: &mut AnthropicRequest) -> Option<String> {
         let system = request.system.as_mut()?;
-
         if let SystemPrompt::Blocks(blocks) = system {
             if blocks.len() < 2 {
                 return None;
             }
-
-            // Check second block (index 1) for tag
             let second_block = &mut blocks[1];
             if !second_block.text.contains("<CCM-SUBAGENT-MODEL>") {
                 return None;
             }
-
-            // Extract model name using regex
-            let re = Regex::new(r"<CCM-SUBAGENT-MODEL>(.*?)</CCM-SUBAGENT-MODEL>")
-                .expect("Invalid regex pattern");
-
+            let re =
+                Regex::new(r"<CCM-SUBAGENT-MODEL>(.*?)</CCM-SUBAGENT-MODEL>")
+                    .expect("Invalid regex pattern");
             if let Some(captures) = re.captures(&second_block.text) {
                 if let Some(model_match) = captures.get(1) {
-                    let model_name = model_match.as_str().to_string();
-
-                    // Remove the tag from the text
+                    let tag_model = model_match.as_str().to_string();
                     second_block.text = re.replace_all(&second_block.text, "").to_string();
-
-                    return Some(model_name);
+                    // Config takes priority over the model name in the tag
+                    if let Some(ref config_model) = self.config.router.subagent {
+                        return Some(config_model.clone());
+                    }
+                    // No config: override request.model so routing continues with tag's value
+                    request.model = tag_model;
+                    return None;
                 }
             }
         }
-
         None
     }
 }
@@ -231,7 +229,7 @@ impl Router {
 mod tests {
     use super::*;
     use crate::cli::{RouterConfig, ServerConfig};
-    use crate::models::{Message, MessageContent, ThinkingConfig};
+    use crate::models::{Message, MessageContent, SystemBlock, SystemPrompt, ThinkingConfig};
 
     fn create_test_config() -> AppConfig {
         AppConfig {
@@ -416,5 +414,79 @@ mod tests {
         let decision = router.route(&mut request).unwrap();
         assert_eq!(decision.route_type, RouteType::Default);
         assert_eq!(decision.model_name, "glm-4.6"); // Uses original model name (no auto-mapping)
+    }
+
+    #[test]
+    fn test_subagent_config_overrides_tag() {
+        let mut config = create_test_config();
+        config.router.subagent = Some("config-model".to_string());
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Do a subagent task");
+        request.system = Some(SystemPrompt::Blocks(vec![
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "System prompt".to_string(),
+                cache_control: None,
+            },
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "<CCM-SUBAGENT-MODEL>model-from-tag</CCM-SUBAGENT-MODEL>".to_string(),
+                cache_control: None,
+            },
+        ]));
+
+        let decision = router.route(&mut request).unwrap();
+        assert_eq!(decision.model_name, "config-model");
+
+        // Tag must be removed from text
+        if let Some(SystemPrompt::Blocks(blocks)) = &request.system {
+            assert!(!blocks[1].text.contains("<CCM-SUBAGENT-MODEL>"));
+        }
+    }
+
+    #[test]
+    fn test_subagent_fallthrough_no_config() {
+        // create_test_config has background = Some("background.model") and
+        // default background_regex matches "(?i)claude.*haiku"
+        let config = create_test_config();
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Do a subagent task");
+        // Tag carries a haiku model name
+        request.system = Some(SystemPrompt::Blocks(vec![
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "System prompt".to_string(),
+                cache_control: None,
+            },
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "<CCM-SUBAGENT-MODEL>claude-3-5-haiku-20241022</CCM-SUBAGENT-MODEL>"
+                    .to_string(),
+                cache_control: None,
+            },
+        ]));
+
+        let decision = router.route(&mut request).unwrap();
+        // handle_subagent_tag mutates request.model → "claude-3-5-haiku-20241022"
+        // background_regex matches → routes to background model
+        assert_eq!(decision.route_type, RouteType::Background);
+        assert_eq!(decision.model_name, "background.model");
+    }
+
+    #[test]
+    fn test_no_tag_no_subagent_routing() {
+        let mut config = create_test_config();
+        config.router.subagent = Some("config-model".to_string());
+        let router = Router::new(config);
+
+        // No system prompt — no tag
+        let mut request = create_simple_request("Regular request");
+
+        // create_simple_request uses "claude-opus-4" which matches auto_map_regex (^claude-)
+        let decision = router.route(&mut request).unwrap();
+        assert_eq!(decision.route_type, RouteType::Default);
+        assert_eq!(decision.model_name, "default.model"); // auto-mapped
     }
 }
