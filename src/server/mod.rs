@@ -268,6 +268,7 @@ async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             "background": state.config.router.background,
             "think": state.config.router.think,
             "websearch": state.config.router.websearch,
+            "subagent": state.config.router.subagent,
         }
     }))
 }
@@ -280,6 +281,7 @@ struct ConfigUpdate {
     background_model: Option<String>,
     think_model: Option<String>,
     websearch_model: Option<String>,
+    subagent_model: Option<String>,
 }
 
 async fn update_config(
@@ -311,6 +313,10 @@ async fn update_config(
 
         if let Some(ws) = update.websearch_model {
             router.insert("websearch".to_string(), toml::Value::String(ws));
+        }
+
+        if let Some(ref v) = update.subagent_model {
+            router.insert("subagent".to_string(), toml::Value::String(v.clone()));
         }
     }
 
@@ -368,6 +374,7 @@ async fn get_config_json(State(state): State<Arc<AppState>>) -> impl IntoRespons
             "background": state.config.router.background,
             "think": state.config.router.think,
             "websearch": state.config.router.websearch,
+            "subagent": state.config.router.subagent,
         },
         "providers": redact_provider_api_keys(&providers_json),
         "models": state.config.models,
@@ -486,6 +493,16 @@ async fn update_config_json(
                 if let Some(s) = bg.as_str() {
                     router_table
                         .insert("background".to_string(), toml::Value::String(s.to_string()));
+                }
+            }
+            if let Some(subagent) = router.get("subagent") {
+                match subagent.as_str() {
+                    Some(s) if !s.is_empty() => {
+                        router_table.insert("subagent".to_string(), toml::Value::String(s.to_string()));
+                    }
+                    _ => {
+                        router_table.remove("subagent");
+                    }
                 }
             }
             if let Some(auto_map) = router.get("auto_map_regex") {
