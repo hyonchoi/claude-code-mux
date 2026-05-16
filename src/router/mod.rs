@@ -238,11 +238,12 @@ mod tests {
             server: ServerConfig::default(),
             router: RouterConfig {
                 default: "default.model".to_string(),
+                subagent: None,
                 background: Some("background.model".to_string()),
                 think: Some("think.model".to_string()),
                 websearch: Some("websearch.model".to_string()),
-                auto_map_regex: None,   // Use default Claude pattern
-                background_regex: None, // Use default claude-haiku pattern
+                auto_map_regex: None,
+                background_regex: None,
             },
             providers: vec![],
             models: vec![],

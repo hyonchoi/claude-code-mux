@@ -83,6 +83,7 @@ fn default_connect_timeout() -> u64 {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RouterConfig {
     pub default: String,
+    pub subagent: Option<String>,
     pub background: Option<String>,
     pub think: Option<String>,
     pub websearch: Option<String>,
