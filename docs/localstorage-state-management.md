@@ -145,9 +145,9 @@ window.addEventListener('DOMContentLoaded', async () => {
 
 ```javascript
 async function deleteProvider(index) {
-    if (!confirm('Are you sure you want to delete this Provider?')) {
-        return;
-    }
+    try {
+        await UIkit.modal.confirm('Are you sure you want to delete this Provider?');
+    } catch { return; }
 
     try {
         // 1. Delete from state
@@ -228,7 +228,9 @@ async function saveAllConfig() {
 
 ```javascript
 async function saveAndRestart() {
-    if (!confirm('Save settings and restart server?')) return;
+    try {
+    await UIkit.modal.confirm('Save settings and restart server?');
+  } catch { return; }
 
     try {
         // 1. Save first

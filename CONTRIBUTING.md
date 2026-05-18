@@ -171,6 +171,7 @@ When modifying the Admin UI (`src/server/admin.html`):
    - Show value before complexity
    - Make questions easy to answer
    - Always show save notifications
+5. **UIKit 3 for dialogs and toasts**: Use `UIkit.modal.confirm()` / `UIkit.modal.prompt()` for dialogs and `UIkit.notification()` for toasts. Never use native `alert()`, `confirm()`, or `prompt()`.
 
 ### Documentation
 
