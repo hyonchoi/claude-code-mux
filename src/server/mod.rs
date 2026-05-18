@@ -23,6 +23,40 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{trace, debug, error, info, warn};
 
+// Background Copilot token refresh timing.
+// Threshold must exceed the poll interval so a freshly-refreshed 30-min token is
+// caught at the next poll instead of expiring silently between checks.
+const COPILOT_POLL_SECS: u64 = 20 * 60;
+const COPILOT_REFRESH_THRESHOLD_SECS: i64 = COPILOT_POLL_SECS as i64 + 5 * 60; // 25 min
+
+/// Returns true when the token will expire before the next background refresh poll.
+fn copilot_token_needs_background_refresh(token: &crate::auth::OAuthToken) -> bool {
+    let remaining = token.expires_at.signed_duration_since(chrono::Utc::now());
+    remaining < chrono::Duration::seconds(COPILOT_REFRESH_THRESHOLD_SECS)
+}
+
+/// Builds a refreshed OAuthToken from a Copilot response, preserving all
+/// provider-specific fields from the original (enterprise_url, project_id, etc.).
+fn build_refreshed_copilot_token(
+    original: &crate::auth::OAuthToken,
+    new_access_token: String,
+    new_expires_at_unix: u64,
+) -> crate::auth::OAuthToken {
+    let expires_at = chrono::DateTime::from_timestamp(
+        new_expires_at_unix.min(i64::MAX as u64) as i64,
+        0,
+    )
+    .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
+    crate::auth::OAuthToken {
+        provider_id: original.provider_id.clone(),
+        access_token: new_access_token,
+        refresh_token: original.refresh_token.clone(),
+        expires_at,
+        enterprise_url: original.enterprise_url.clone(),
+        project_id: original.project_id.clone(),
+    }
+}
+
 /// Constant-time byte comparison to prevent timing side-channel attacks on API keys.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -157,30 +191,24 @@ pub async fn start_server(
         let bg_providers = state.config.providers.clone();
         let bg_client = reqwest::Client::new();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(20 * 60));
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(COPILOT_POLL_SECS));
             interval.tick().await; // skip the immediate first tick
             loop {
                 interval.tick().await;
                 for provider_config in &bg_providers {
                     if provider_config.provider_type == "copilot" {
                         if let Some(token) = bg_token_store.get(&provider_config.name) {
-                            if token.needs_refresh() {
+                            if copilot_token_needs_background_refresh(&token) {
                                 match crate::auth::github_copilot::refresh_copilot_token(
                                     &bg_client,
                                     &token.refresh_token,
                                 ).await {
                                     Ok(resp) => {
-                                        let new_expires_at = chrono::DateTime::from_timestamp(
-                                            resp.expires_at.min(i64::MAX as u64) as i64, 0,
-                                        ).unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
-                                        let updated = crate::auth::OAuthToken {
-                                            provider_id: token.provider_id.clone(),
-                                            access_token: resp.token,
-                                            refresh_token: token.refresh_token.clone(),
-                                            expires_at: new_expires_at,
-                                            enterprise_url: None,
-                                            project_id: None,
-                                        };
+                                        let updated = build_refreshed_copilot_token(
+                                            &token,
+                                            resp.token,
+                                            resp.expires_at,
+                                        );
                                         if let Err(e) = bg_token_store.save(updated) {
                                             warn!("Background refresh: failed to save Copilot token for '{}': {}", provider_config.name, e);
                                         } else {
@@ -2055,5 +2083,87 @@ mod tests {
     #[test]
     fn test_constant_time_eq_empty() {
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_build_refreshed_copilot_token_preserves_enterprise_url() {
+        let original = crate::auth::OAuthToken {
+            provider_id: "copilot-ent".to_string(),
+            access_token: "old-bearer".to_string(),
+            refresh_token: "github-pat".to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+            enterprise_url: Some("https://my-org.copilot.github.com".to_string()),
+            project_id: None,
+        };
+        let refreshed = build_refreshed_copilot_token(
+            &original,
+            "new-bearer".to_string(),
+            (chrono::Utc::now() + chrono::Duration::minutes(30)).timestamp() as u64,
+        );
+        assert_eq!(refreshed.enterprise_url, original.enterprise_url);
+        assert_eq!(refreshed.provider_id, original.provider_id);
+        assert_eq!(refreshed.refresh_token, original.refresh_token);
+        assert_eq!(refreshed.access_token, "new-bearer");
+    }
+
+    #[test]
+    fn test_build_refreshed_copilot_token_preserves_project_id() {
+        let original = crate::auth::OAuthToken {
+            provider_id: "gemini-dev".to_string(),
+            access_token: "old-token".to_string(),
+            refresh_token: "refresh-tok".to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+            enterprise_url: None,
+            project_id: Some("my-gcp-project-123".to_string()),
+        };
+        let refreshed = build_refreshed_copilot_token(
+            &original,
+            "new-token".to_string(),
+            (chrono::Utc::now() + chrono::Duration::minutes(30)).timestamp() as u64,
+        );
+        assert_eq!(refreshed.project_id, original.project_id);
+        assert_eq!(refreshed.enterprise_url, None);
+    }
+
+    #[test]
+    fn test_copilot_token_needs_background_refresh_near_expiry() {
+        // Token expires in 20 min — below the 25-min threshold → should refresh
+        let token = crate::auth::OAuthToken {
+            provider_id: "copilot".to_string(),
+            access_token: "bearer".to_string(),
+            refresh_token: "github-pat".to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(20),
+            enterprise_url: None,
+            project_id: None,
+        };
+        assert!(copilot_token_needs_background_refresh(&token));
+    }
+
+    #[test]
+    fn test_copilot_token_needs_background_refresh_fresh_token() {
+        // Token expires in 60 min — well above the 25-min threshold → should not refresh
+        let token = crate::auth::OAuthToken {
+            provider_id: "copilot".to_string(),
+            access_token: "bearer".to_string(),
+            refresh_token: "github-pat".to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(60),
+            enterprise_url: None,
+            project_id: None,
+        };
+        assert!(!copilot_token_needs_background_refresh(&token));
+    }
+
+    #[test]
+    fn test_copilot_token_needs_background_refresh_already_expired() {
+        // Token already expired → must refresh
+        let token = crate::auth::OAuthToken {
+            provider_id: "copilot".to_string(),
+            access_token: "bearer".to_string(),
+            refresh_token: "github-pat".to_string(),
+            expires_at: chrono::Utc::now() - chrono::Duration::minutes(5),
+            enterprise_url: None,
+            project_id: None,
+        };
+        assert!(copilot_token_needs_background_refresh(&token));
     }
 }
