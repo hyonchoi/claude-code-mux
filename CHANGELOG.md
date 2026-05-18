@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Configurable Subagent Model** — set `router.subagent` in your config (or via the admin Router tab) to route all subagent requests to a specific model, overriding the model name embedded in the `<CCM-SUBAGENT-MODEL>` tag
 - Subagent Model dropdown added to the Router tab in the admin UI, matching the Think/Background/WebSearch pattern
 - `current-subagent` display added to the status overview card
+- Admin UI now uses UIKit modal dialogs and toast notifications instead of browser-native `alert()`/`confirm()`/`prompt()` popups — no more dialog boxes that block the whole browser tab
 
 ### Changed
 - Subagent routing now has two modes: when `router.subagent` is set, that model wins; when unset, the tag's model name falls through to think/background/auto-map/default routing as before — no behavior change for existing configs

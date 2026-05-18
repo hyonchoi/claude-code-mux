@@ -139,3 +139,50 @@ Priority:
 - P3
 Depends on / blocked by:
 - Streaming auth threading (this PR).
+
+## [P3] admin.html onclick Attribute JS-String Injection
+What:
+Lines ~4353/4359 in admin.html build inline onclick attributes with un-escaped provider IDs:
+`onclick="deleteOAuthToken('${providerId}')"`. escapeHtml() only escapes HTML entities,
+not JS string characters. A provider ID containing a single quote breaks the attribute.
+Why:
+A provider named `o'reilly` would generate invalid JS in the attribute string, causing
+a silent parse error and the delete button becoming non-functional.
+Pros:
+- Fixes a latent attribute injection bug.
+- Consistent with defensive coding already practiced elsewhere in admin.html.
+Cons:
+- Requires either a dedicated JS-string escaper or a data-* attribute + event delegation refactor.
+Context:
+Found by Codex outside-voice during /plan-eng-review of the browser dialog refactor (2026-05-18).
+Pre-existing bug, not introduced by the dialog refactor PR.
+Effort estimate:
+- Human team: S
+- CC+gstack: S
+Priority:
+- P3
+Depends on / blocked by:
+- None.
+
+## [P3] admin.html loadConfig() Missing response.ok Check After 401 Cancel
+What:
+In apiFetch(), when the user cancels the API key prompt, the original 401 response is
+returned. loadConfig() at ~line 2230 calls `await response.json()` without checking
+`response.ok` first. If the server's 401 body is not valid JSON, this throws a parse error.
+Why:
+Silent or cryptic failure when the user cancels the API key prompt during page load.
+Pros:
+- Explicit error handling: clear "cancelled" state vs. "parse failed" state.
+- Better UX: show "API key required" message rather than unhandled rejection.
+Cons:
+- Small change but touches the startup auth flow.
+Context:
+Found by Codex outside-voice during /plan-eng-review of the browser dialog refactor (2026-05-18).
+Pre-existing bug, not introduced by the dialog refactor PR.
+Effort estimate:
+- Human team: XS
+- CC+gstack: XS
+Priority:
+- P3
+Depends on / blocked by:
+- None (can be fixed independently after the dialog refactor lands).
