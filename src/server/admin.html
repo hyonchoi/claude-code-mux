@@ -2172,13 +2172,12 @@ async function apiFetch(url, options = {}) {
 
             // Notification Helper
             function notify(message, status = "primary") {
-                if (typeof UIkit === "undefined" || !UIkit.notification) {
-                    // Fallback to alert if UIkit is not loaded
-                    alert(message);
+                if (typeof UIkit === "undefined") {
+                    console.error("[notify] UIkit not loaded:", message);
                     return;
                 }
                 UIkit.notification({
-                    message: message,
+                    message: escapeHtml(message),
                     status: status,
                     pos: "top-right",
                     timeout: 3000,
