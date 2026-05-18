@@ -1,3 +1,28 @@
+## Commands
+
+```bash
+cargo build            # compile
+cargo run              # run dev server (default port 3000)
+cargo run --release    # production build
+cargo test             # run all tests
+cargo clippy           # lint
+cargo fmt              # format
+```
+
+Binary name: `ccm`. Config file: TOML, set via `--config <path>` (see `config/example.toml`).
+
+## Codebase Structure
+
+- `src/main.rs` — CLI entry point (`--port`, `--config` flags)
+- `src/server/` — HTTP server, admin UI (`admin.html`), OAuth handlers
+- `src/router/` — intelligent routing logic (task-type detection, provider fallback)
+- `src/providers/` — per-provider API adapters
+- `src/models/` — config types and model mapping
+- `src/auth/` — API key and OAuth credential management
+- `config/` — example TOML configs (`example.toml`, `default.example.toml`)
+
+---
+
 # RapidSpec Instructions
 
 AI assistant instructions for this project using RapidSpec workflow.
@@ -55,6 +80,10 @@ See `@docs/localstorage-state-management.md` for detailed documentation.
 2. All operations must update `appState.config` → `saveToLocalStorage()`
 3. Only save buttons call `syncToServer()`
 4. Always notify user: "(저장 버튼을 눌러 적용하세요)"
+
+**No JS test framework** — verification is browser DevTools console only. Call the changed function directly to test.
+
+**UIKit 3** is loaded via CDN (`uikit@3/dist/js/uikit.min.js`). Use `UIkit.modal.confirm()` / `UIkit.modal.prompt()` for dialogs and `UIkit.notification()` for toasts. Never use native `alert()`, `confirm()`, or `prompt()`.
 
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
