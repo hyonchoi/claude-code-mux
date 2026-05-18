@@ -140,6 +140,33 @@ Priority:
 Depends on / blocked by:
 - Streaming auth threading (this PR).
 
+## [P2] Background OAuth Refresh Generalization
+What:
+Generalize the background Copilot token refresh task to cover all OAuth-based providers
+(Gemini, OpenAI-compatible, Anthropic-compatible) that share the same idle-expiry problem.
+Why:
+The 25ceb60 fix prevents idle Copilot tokens from expiring silently. The same token-expiry
+problem affects any OAuth provider that isn't in the active fallback chain and receives no
+requests. The fix only handles Copilot's GitHub-token → bearer exchange path.
+Pros:
+- Eliminates idle-expiry for Gemini/OpenAI/Anthropic OAuth providers.
+- Centralizes refresh logic in one background task instead of per-provider on-demand only.
+Cons:
+- Requires routing the refresh call per provider type (Copilot: refresh_copilot_token();
+  others: OAuthClient::refresh_token()). Non-trivial to get right without regression.
+Context:
+Raised by /plan-eng-review (D2, 2026-05-18). Current fix in 25ceb60 is Copilot-specific.
+Standard OAuth tokens (Google, OpenAI, etc.) can be refreshed via OAuthClient::refresh_token().
+Threshold approach: use remaining_time < POLL_INTERVAL + buffer (not hardcoded 5-min
+needs_refresh()), which adapts correctly to any token TTL.
+Effort estimate:
+- Human team: M
+- CC+gstack: S
+Priority:
+- P2
+Depends on / blocked by:
+- Background Copilot refresh fix (25ceb60) as the pattern to generalize.
+
 ## [P3] admin.html onclick Attribute JS-String Injection
 What:
 Lines ~4353/4359 in admin.html build inline onclick attributes with un-escaped provider IDs:
