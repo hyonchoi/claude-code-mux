@@ -959,20 +959,6 @@ async fn handle_openai_chat_completions(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
-        if passthrough_token.is_some() {
-            let pt_capable: Vec<_> = sorted_mappings
-                .iter()
-                .filter(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider))
-                .cloned()
-                .collect();
-            if pt_capable.is_empty() {
-                warn!("🔑 No passthrough-capable providers available — continuing without passthrough bearer");
-                anthropic_request.passthrough_auth = None;
-            } else {
-                sorted_mappings = pt_capable;
-            }
-        }
-
         // Save original beta header to restore for each mapping attempt
         let original_beta_header = anthropic_request.anthropic_beta_header.clone();
 
