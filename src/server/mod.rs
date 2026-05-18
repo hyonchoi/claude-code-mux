@@ -149,6 +149,56 @@ pub async fn start_server(
         config_path,
     });
 
+    // Background task: proactively refresh Copilot OAuth bearer tokens every 20 minutes.
+    // Copilot bearers have a ~30-minute TTL. Without this, idle providers (not in the
+    // active fallback chain) never get refreshed and require full re-OAuth when re-enabled.
+    {
+        let bg_token_store = state.token_store.clone();
+        let bg_providers = state.config.providers.clone();
+        let bg_client = reqwest::Client::new();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(20 * 60));
+            interval.tick().await; // skip the immediate first tick
+            loop {
+                interval.tick().await;
+                for provider_config in &bg_providers {
+                    if provider_config.provider_type == "copilot" {
+                        if let Some(token) = bg_token_store.get(&provider_config.name) {
+                            if token.needs_refresh() {
+                                match crate::auth::github_copilot::refresh_copilot_token(
+                                    &bg_client,
+                                    &token.refresh_token,
+                                ).await {
+                                    Ok(resp) => {
+                                        let new_expires_at = chrono::DateTime::from_timestamp(
+                                            resp.expires_at.min(i64::MAX as u64) as i64, 0,
+                                        ).unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
+                                        let updated = crate::auth::OAuthToken {
+                                            provider_id: token.provider_id.clone(),
+                                            access_token: resp.token,
+                                            refresh_token: token.refresh_token.clone(),
+                                            expires_at: new_expires_at,
+                                            enterprise_url: None,
+                                            project_id: None,
+                                        };
+                                        if let Err(e) = bg_token_store.save(updated) {
+                                            warn!("Background refresh: failed to save Copilot token for '{}': {}", provider_config.name, e);
+                                        } else {
+                                            info!("Background refresh: renewed Copilot bearer for '{}'", provider_config.name);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Background refresh: failed to renew Copilot bearer for '{}': {}", provider_config.name, e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // Build router — public routes (no auth required)
     let public_routes = AxumRouter::new()
         .route("/", get(serve_admin))
