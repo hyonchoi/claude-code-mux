@@ -134,6 +134,7 @@ pub struct AppState {
     pub provider_registry: Arc<ProviderRegistry>,
     pub token_store: TokenStore,
     pub config_path: std::path::PathBuf,
+    pub provider_cooldowns: Arc<dashmap::DashMap<String, std::time::Instant>>,
 }
 
 /// Strip beta options from an AnthropicRequest based on mapping configuration
@@ -208,6 +209,7 @@ pub async fn start_server(
         provider_registry,
         token_store,
         config_path,
+        provider_cooldowns: Arc::new(dashmap::DashMap::new()),
     });
 
     // Background task: proactively refresh Copilot OAuth bearer tokens every 20 minutes.
@@ -1026,6 +1028,12 @@ async fn handle_openai_chat_completions(
                 mapping.actual_model
             );
 
+            if is_on_cooldown(&state.provider_cooldowns, &mapping.provider) {
+                info!("⏭ Skipping provider {} (on cooldown)", mapping.provider);
+                fallback_failures.push(format!("{}: on cooldown", mapping.provider));
+                continue;
+            }
+
             // Try to get provider from registry
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Update model to actual model name
@@ -1076,6 +1084,17 @@ async fn handle_openai_chat_completions(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
+                        if let Some(duration) = cooldown_for_4xx(&e) {
+                            state.provider_cooldowns.insert(
+                                mapping.provider.clone(),
+                                std::time::Instant::now() + duration,
+                            );
+                            warn!(
+                                "⏸ Provider {} on cooldown for {}s",
+                                mapping.provider,
+                                duration.as_secs()
+                            );
+                        }
                         fallback_failures.push(format!("{}: {}", mapping.provider, e));
                         continue;
                     }
@@ -1280,6 +1299,12 @@ async fn handle_messages(
                 mapping.actual_model
             );
 
+            if is_on_cooldown(&state.provider_cooldowns, &mapping.provider) {
+                info!("⏭ Skipping provider {} (on cooldown)", mapping.provider);
+                fallback_failures.push(format!("{}: on cooldown", mapping.provider));
+                continue;
+            }
+
             // Try to get provider from registry
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Trust the model mapping configuration - no need to validate
@@ -1363,6 +1388,17 @@ async fn handle_messages(
                                 "⚠️ Provider {} streaming failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
+                            if let Some(duration) = cooldown_for_4xx(&e) {
+                                state.provider_cooldowns.insert(
+                                    mapping.provider.clone(),
+                                    std::time::Instant::now() + duration,
+                                );
+                                warn!(
+                                    "⏸ Provider {} on cooldown for {}s",
+                                    mapping.provider,
+                                    duration.as_secs()
+                                );
+                            }
                             fallback_failures.push(format!("{} (stream): {}", mapping.provider, e));
                             continue;
                         }
@@ -1384,6 +1420,17 @@ async fn handle_messages(
                                 "⚠️ Provider {} failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
+                            if let Some(duration) = cooldown_for_4xx(&e) {
+                                state.provider_cooldowns.insert(
+                                    mapping.provider.clone(),
+                                    std::time::Instant::now() + duration,
+                                );
+                                warn!(
+                                    "⏸ Provider {} on cooldown for {}s",
+                                    mapping.provider,
+                                    duration.as_secs()
+                                );
+                            }
                             fallback_failures.push(format!("{}: {}", mapping.provider, e));
                             continue;
                         }
@@ -1567,6 +1614,11 @@ async fn handle_count_tokens(
                 mapping.actual_model
             );
 
+            if is_on_cooldown(&state.provider_cooldowns, &mapping.provider) {
+                info!("⏭ Skipping provider {} (on cooldown)", mapping.provider);
+                continue;
+            }
+
             // Try to get provider from registry
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Trust the model mapping configuration - no need to validate
@@ -1595,6 +1647,17 @@ async fn handle_count_tokens(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
+                        if let Some(duration) = cooldown_for_4xx(&e) {
+                            state.provider_cooldowns.insert(
+                                mapping.provider.clone(),
+                                std::time::Instant::now() + duration,
+                            );
+                            warn!(
+                                "⏸ Provider {} on cooldown for {}s",
+                                mapping.provider,
+                                duration.as_secs()
+                            );
+                        }
                         continue;
                     }
                 }
