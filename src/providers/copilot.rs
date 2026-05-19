@@ -1,16 +1,16 @@
-use super::{AnthropicProvider, ProviderResponse, error::ProviderError};
 use super::openai::{OpenAIProvider, OpenAIResponse};
-use crate::auth::{TokenStore, OAuthToken};
+use super::{error::ProviderError, AnthropicProvider, ProviderResponse};
 use crate::auth::github_copilot::{parse_proxy_ep, refresh_copilot_token};
+use crate::auth::{OAuthToken, TokenStore};
 use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse, MessageContent};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::stream::Stream;
+use futures::stream::TryStreamExt;
 use reqwest::Client;
 use std::pin::Pin;
 use std::sync::Arc;
-use futures::stream::TryStreamExt;
 
 const COPILOT_HEADERS: &[(&str, &str)] = &[
     ("Editor-Version", "vscode/1.107.0"),
@@ -65,13 +65,17 @@ impl CopilotProvider {
             }
 
             let github_token = token.refresh_token.clone();
-            let copilot_resp = refresh_copilot_token(&self.client, &github_token).await.map_err(|e| {
-                ProviderError::AuthError(format!("Failed to refresh Copilot token: {}", e))
-            })?;
+            let copilot_resp = refresh_copilot_token(&self.client, &github_token)
+                .await
+                .map_err(|e| {
+                    ProviderError::AuthError(format!("Failed to refresh Copilot token: {}", e))
+                })?;
 
             let new_expires_at = chrono::DateTime::from_timestamp(
-                copilot_resp.expires_at.min(i64::MAX as u64) as i64, 0
-            ).unwrap_or_else(|| Utc::now() + chrono::Duration::minutes(30));
+                copilot_resp.expires_at.min(i64::MAX as u64) as i64,
+                0,
+            )
+            .unwrap_or_else(|| Utc::now() + chrono::Duration::minutes(30));
 
             let updated_token = OAuthToken {
                 provider_id: token.provider_id.clone(),
@@ -109,7 +113,10 @@ impl CopilotProvider {
 
 #[async_trait]
 impl AnthropicProvider for CopilotProvider {
-    async fn send_message(&self, request: AnthropicRequest) -> Result<ProviderResponse, ProviderError> {
+    async fn send_message(
+        &self,
+        request: AnthropicRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
         let bearer = self.get_valid_copilot_token().await?;
         let base_url = parse_proxy_ep(&bearer);
         let url = format!("{}/chat/completions", base_url);
@@ -117,15 +124,19 @@ impl AnthropicProvider for CopilotProvider {
         let delegate = Self::make_delegate();
         let openai_request = delegate.transform_request(&request)?;
 
-        let mut json_body = serde_json::to_value(&openai_request)
-            .map_err(|e| ProviderError::ApiError { status: 500, message: e.to_string() })?;
+        let mut json_body =
+            serde_json::to_value(&openai_request).map_err(|e| ProviderError::ApiError {
+                status: 500,
+                message: e.to_string(),
+            })?;
         if request.model == "auto" {
             if let serde_json::Value::Object(ref mut map) = json_body {
                 map.remove("model");
             }
         }
 
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", bearer))
             .header("Content-Type", "application/json");
@@ -134,7 +145,10 @@ impl AnthropicProvider for CopilotProvider {
             req_builder = req_builder.header(*key, *value);
         }
 
-        let response = req_builder.json(&json_body).send().await
+        let response = req_builder
+            .json(&json_body)
+            .send()
+            .await
             .map_err(ProviderError::HttpError)?;
 
         // On 401, refresh the token once and retry — handles the race between
@@ -143,14 +157,18 @@ impl AnthropicProvider for CopilotProvider {
             tracing::info!("Copilot token rejected (401), refreshing and retrying");
             let fresh_bearer = self.get_valid_copilot_token().await?;
             let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
-            let mut retry_builder = self.client
+            let mut retry_builder = self
+                .client
                 .post(&fresh_url)
                 .header("Authorization", format!("Bearer {}", fresh_bearer))
                 .header("Content-Type", "application/json");
             for (key, value) in COPILOT_HEADERS {
                 retry_builder = retry_builder.header(*key, *value);
             }
-            retry_builder.json(&json_body).send().await
+            retry_builder
+                .json(&json_body)
+                .send()
+                .await
                 .map_err(ProviderError::HttpError)?
         } else {
             response
@@ -158,15 +176,24 @@ impl AnthropicProvider for CopilotProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ProviderError::ApiError { status, message: error_text });
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ProviderError::ApiError {
+                status,
+                message: error_text,
+            });
         }
 
         let response_text = response.text().await.map_err(ProviderError::HttpError)?;
         tracing::debug!("Copilot provider response: {} bytes", response_text.len());
 
-        let openai_response: OpenAIResponse = serde_json::from_str(&response_text)
-            .map_err(|e| ProviderError::ApiError { status: 500, message: e.to_string() })?;
+        let openai_response: OpenAIResponse =
+            serde_json::from_str(&response_text).map_err(|e| ProviderError::ApiError {
+                status: 500,
+                message: e.to_string(),
+            })?;
 
         Ok(delegate.transform_response(openai_response))
     }
@@ -174,7 +201,8 @@ impl AnthropicProvider for CopilotProvider {
     async fn send_message_stream(
         &self,
         request: AnthropicRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
+    {
         let bearer = self.get_valid_copilot_token().await?;
         let base_url = parse_proxy_ep(&bearer);
         let url = format!("{}/chat/completions", base_url);
@@ -182,15 +210,19 @@ impl AnthropicProvider for CopilotProvider {
         let delegate = Self::make_delegate();
         let openai_request = delegate.transform_request(&request)?;
 
-        let mut json_body = serde_json::to_value(&openai_request)
-            .map_err(|e| ProviderError::ApiError { status: 500, message: e.to_string() })?;
+        let mut json_body =
+            serde_json::to_value(&openai_request).map_err(|e| ProviderError::ApiError {
+                status: 500,
+                message: e.to_string(),
+            })?;
         if request.model == "auto" {
             if let serde_json::Value::Object(ref mut map) = json_body {
                 map.remove("model");
             }
         }
 
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", bearer))
             .header("Content-Type", "application/json")
@@ -200,7 +232,10 @@ impl AnthropicProvider for CopilotProvider {
             req_builder = req_builder.header(*key, *value);
         }
 
-        let response = req_builder.json(&json_body).send().await
+        let response = req_builder
+            .json(&json_body)
+            .send()
+            .await
             .map_err(ProviderError::HttpError)?;
 
         // On 401, refresh and retry once
@@ -208,7 +243,8 @@ impl AnthropicProvider for CopilotProvider {
             tracing::info!("Copilot token rejected (401) in stream, refreshing and retrying");
             let fresh_bearer = self.get_valid_copilot_token().await?;
             let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
-            let mut retry_builder = self.client
+            let mut retry_builder = self
+                .client
                 .post(&fresh_url)
                 .header("Authorization", format!("Bearer {}", fresh_bearer))
                 .header("Content-Type", "application/json")
@@ -216,7 +252,10 @@ impl AnthropicProvider for CopilotProvider {
             for (key, value) in COPILOT_HEADERS {
                 retry_builder = retry_builder.header(*key, *value);
             }
-            retry_builder.json(&json_body).send().await
+            retry_builder
+                .json(&json_body)
+                .send()
+                .await
                 .map_err(ProviderError::HttpError)?
         } else {
             response
@@ -224,23 +263,34 @@ impl AnthropicProvider for CopilotProvider {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ProviderError::ApiError { status, message: error_text });
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ProviderError::ApiError {
+                status,
+                message: error_text,
+            });
         }
 
         let stream = response.bytes_stream().map_err(ProviderError::HttpError);
         Ok(Box::pin(stream))
     }
 
-    async fn count_tokens(&self, request: CountTokensRequest) -> Result<CountTokensResponse, ProviderError> {
+    async fn count_tokens(
+        &self,
+        request: CountTokensRequest,
+    ) -> Result<CountTokensResponse, ProviderError> {
         let mut total_chars = 0usize;
 
         if let Some(ref system) = request.system {
             let text = match system {
                 crate::models::SystemPrompt::Text(t) => t.clone(),
-                crate::models::SystemPrompt::Blocks(blocks) => {
-                    blocks.iter().map(|b| b.text.clone()).collect::<Vec<_>>().join("\n")
-                }
+                crate::models::SystemPrompt::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| b.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             };
             total_chars += text.len();
         }
@@ -248,7 +298,8 @@ impl AnthropicProvider for CopilotProvider {
         for msg in &request.messages {
             let text = match &msg.content {
                 MessageContent::Text(t) => t.clone(),
-                MessageContent::Blocks(blocks) => blocks.iter()
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
                     .filter_map(|b| match b {
                         crate::models::ContentBlock::Text { text } => Some(text.clone()),
                         crate::models::ContentBlock::ToolResult { content, .. } => {

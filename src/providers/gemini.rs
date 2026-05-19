@@ -120,7 +120,10 @@ impl GeminiProvider {
             if let Some(token) = token_store.get(oauth_provider_id) {
                 // Check if token needs refresh
                 if token.needs_refresh() {
-                    tracing::info!("🔄 Token for '{}' needs refresh, refreshing...", oauth_provider_id);
+                    tracing::info!(
+                        "🔄 Token for '{}' needs refresh, refreshing...",
+                        oauth_provider_id
+                    );
 
                     // Refresh token
                     let config = OAuthConfig::gemini();
@@ -134,7 +137,8 @@ impl GeminiProvider {
                         Err(e) => {
                             tracing::error!("❌ Failed to refresh token: {}", e);
                             return Err(ProviderError::AuthError(format!(
-                                "Failed to refresh OAuth token: {}", e
+                                "Failed to refresh OAuth token: {}",
+                                e
                             )));
                         }
                     }
@@ -183,18 +187,14 @@ impl GeminiProvider {
 
             let parts = match &msg.content {
                 MessageContent::Text(text) => {
-                    vec![GeminiPart::Text {
-                        text: text.clone(),
-                    }]
+                    vec![GeminiPart::Text { text: text.clone() }]
                 }
                 MessageContent::Blocks(blocks) => {
                     let mut parts = Vec::new();
                     for block in blocks {
                         match block {
                             ContentBlock::Text { text } => {
-                                parts.push(GeminiPart::Text {
-                                    text: text.clone(),
-                                });
+                                parts.push(GeminiPart::Text { text: text.clone() });
                             }
                             ContentBlock::Image { source } => {
                                 // Convert to Gemini inline_data format
@@ -317,9 +317,7 @@ impl GeminiProvider {
             .parts
             .iter()
             .map(|part| match part {
-                GeminiPart::Text { text } => ContentBlock::Text {
-                    text: text.clone(),
-                },
+                GeminiPart::Text { text } => ContentBlock::Text { text: text.clone() },
                 _ => ContentBlock::Text {
                     text: String::new(),
                 },
@@ -357,7 +355,6 @@ impl GeminiProvider {
         })
     }
 
-
     /// Handle 429 rate limit errors with automatic retry
     async fn handle_rate_limit_retry<F, Fut>(
         &self,
@@ -369,24 +366,31 @@ impl GeminiProvider {
         Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
     {
         let mut retries = 0;
-        
+
         loop {
             let response = request_fn().await?;
-            
+
             // Check if it's a 429 error
             if response.status().as_u16() == 429 {
                 let error_text = response.text().await.unwrap_or_default();
-                
+
                 // Try to extract retry delay
                 if let Some(delay) = extract_retry_delay(&error_text) {
                     if retries < max_retries {
                         retries += 1;
-                        tracing::warn!("⏱️  Rate limit hit (attempt {}/{}), retrying after {:?}...", 
-                                      retries, max_retries, delay);
+                        tracing::warn!(
+                            "⏱️  Rate limit hit (attempt {}/{}), retrying after {:?}...",
+                            retries,
+                            max_retries,
+                            delay
+                        );
                         tokio::time::sleep(delay).await;
                         continue;
                     } else {
-                        tracing::error!("❌ Rate limit retries exhausted after {} attempts", max_retries);
+                        tracing::error!(
+                            "❌ Rate limit retries exhausted after {} attempts",
+                            max_retries
+                        );
                         return Err(ProviderError::ApiError {
                             status: 429,
                             message: error_text,
@@ -400,7 +404,7 @@ impl GeminiProvider {
                     });
                 }
             }
-            
+
             return Ok(response);
         }
     }
@@ -427,7 +431,8 @@ impl AnthropicProvider for GeminiProvider {
 
             // Get project_id from token store
             let project_id = if let (Some(oauth_provider_id), Some(token_store)) =
-                (&self.oauth_provider_id, &self.token_store) {
+                (&self.oauth_provider_id, &self.token_store)
+            {
                 token_store
                     .get(oauth_provider_id)
                     .and_then(|token| token.project_id.clone())
@@ -436,7 +441,9 @@ impl AnthropicProvider for GeminiProvider {
             };
 
             if project_id.is_none() {
-                tracing::warn!("⚠️ No project_id found in token for Gemini OAuth. Code Assist API may fail.");
+                tracing::warn!(
+                    "⚠️ No project_id found in token for Gemini OAuth. Code Assist API may fail."
+                );
             }
 
             // Generate unique user_prompt_id
@@ -474,23 +481,25 @@ impl AnthropicProvider for GeminiProvider {
             let url = url.clone();
 
             // Use retry handler for 429 errors
-            let response = self.handle_rate_limit_retry(
-                move || {
-                    let mut req_builder = client
-                        .post(&url)
-                        .header("Content-Type", "application/json")
-                        .header("Authorization", &bearer_token);
+            let response = self
+                .handle_rate_limit_retry(
+                    move || {
+                        let mut req_builder = client
+                            .post(&url)
+                            .header("Content-Type", "application/json")
+                            .header("Authorization", &bearer_token);
 
-                    // Add custom headers
-                    for (key, value) in &custom_headers {
-                        req_builder = req_builder.header(key, value);
-                    }
+                        // Add custom headers
+                        for (key, value) in &custom_headers {
+                            req_builder = req_builder.header(key, value);
+                        }
 
-                    // Send request
-                    req_builder.json(&code_assist_request).send()
-                },
-                3, // max_retries
-            ).await?;
+                        // Send request
+                        req_builder.json(&code_assist_request).send()
+                    },
+                    3, // max_retries
+                )
+                .await?;
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
@@ -502,13 +511,18 @@ impl AnthropicProvider for GeminiProvider {
                 // Special handling for 404 errors (model not found)
                 if status == 404 {
                     let model_name = &model;
-                    let user_friendly_msg = if model_name.contains("gemini-3") || model_name.contains("preview") {
+                    let user_friendly_msg = if model_name.contains("gemini-3")
+                        || model_name.contains("preview")
+                    {
                         format!(
                             "Model '{}' is not available. This may be a preview model that requires special access. \n                            Try using gemini-2.5-pro or gemini-2.0-flash-exp instead. \n                            Original error: {}",
                             model_name, error_text
                         )
                     } else {
-                        format!("Model '{}' not found. Original error: {}", model_name, error_text)
+                        format!(
+                            "Model '{}' not found. Original error: {}",
+                            model_name, error_text
+                        )
                     };
                     tracing::warn!("⚠️ Model not found (404): {}", user_friendly_msg);
                     return Err(ProviderError::ApiError {
@@ -551,7 +565,8 @@ impl AnthropicProvider for GeminiProvider {
                 )
             } else {
                 return Err(ProviderError::ConfigError(
-                    "Gemini provider requires either api_key, OAuth, or Vertex AI configuration".to_string()
+                    "Gemini provider requires either api_key, OAuth, or Vertex AI configuration"
+                        .to_string(),
                 ));
             };
 
@@ -562,20 +577,23 @@ impl AnthropicProvider for GeminiProvider {
             let url = url.clone();
 
             // Use retry handler for 429 errors
-            let response = self.handle_rate_limit_retry(
-                move || {
-                    let mut req_builder = client.post(&url).header("Content-Type", "application/json");
+            let response = self
+                .handle_rate_limit_retry(
+                    move || {
+                        let mut req_builder =
+                            client.post(&url).header("Content-Type", "application/json");
 
-                    // Add custom headers
-                    for (key, value) in &custom_headers {
-                        req_builder = req_builder.header(key, value);
-                    }
+                        // Add custom headers
+                        for (key, value) in &custom_headers {
+                            req_builder = req_builder.header(key, value);
+                        }
 
-                    // Send request
-                    req_builder.json(&gemini_request).send()
-                },
-                3, // max_retries
-            ).await?;
+                        // Send request
+                        req_builder.json(&gemini_request).send()
+                    },
+                    3, // max_retries
+                )
+                .await?;
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
@@ -598,7 +616,12 @@ impl AnthropicProvider for GeminiProvider {
     async fn send_message_stream(
         &self,
         request: AnthropicRequest,
-    ) -> Result<std::pin::Pin<Box<dyn futures::stream::Stream<Item = Result<bytes::Bytes, ProviderError>> + Send>>, ProviderError> {
+    ) -> Result<
+        std::pin::Pin<
+            Box<dyn futures::stream::Stream<Item = Result<bytes::Bytes, ProviderError>> + Send>,
+        >,
+        ProviderError,
+    > {
         use futures::TryStreamExt;
 
         let model = request.model.clone();
@@ -616,7 +639,8 @@ impl AnthropicProvider for GeminiProvider {
 
             // Get project_id from token store
             let project_id = if let (Some(oauth_provider_id), Some(token_store)) =
-                (&self.oauth_provider_id, &self.token_store) {
+                (&self.oauth_provider_id, &self.token_store)
+            {
                 token_store
                     .get(oauth_provider_id)
                     .and_then(|token| token.project_id.clone())
@@ -625,7 +649,9 @@ impl AnthropicProvider for GeminiProvider {
             };
 
             if project_id.is_none() {
-                tracing::warn!("⚠️ No project_id found in token for Gemini OAuth. Code Assist API may fail.");
+                tracing::warn!(
+                    "⚠️ No project_id found in token for Gemini OAuth. Code Assist API may fail."
+                );
             }
 
             // Generate unique user_prompt_id
@@ -651,7 +677,8 @@ impl AnthropicProvider for GeminiProvider {
             tracing::debug!("🔐 Using OAuth Code Assist API (streaming): {}", url);
 
             // Build request
-            let mut req_builder = self.client
+            let mut req_builder = self
+                .client
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .header("Authorization", bearer_token);
@@ -670,7 +697,11 @@ impl AnthropicProvider for GeminiProvider {
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                tracing::error!("Code Assist API streaming error ({}): {}", status, error_text);
+                tracing::error!(
+                    "Code Assist API streaming error ({}): {}",
+                    status,
+                    error_text
+                );
                 return Err(ProviderError::ApiError {
                     status,
                     message: error_text,
@@ -679,7 +710,9 @@ impl AnthropicProvider for GeminiProvider {
 
             // Return the streaming response
             // The Gemini API returns SSE format, just pass through the stream
-            let stream = response.bytes_stream().map_err(|e| ProviderError::HttpError(e));
+            let stream = response
+                .bytes_stream()
+                .map_err(|e| ProviderError::HttpError(e));
             Ok(Box::pin(stream))
         } else {
             // Use public Gemini API or Vertex AI streaming
@@ -705,14 +738,18 @@ impl AnthropicProvider for GeminiProvider {
                 )
             } else {
                 return Err(ProviderError::ConfigError(
-                    "Gemini provider requires either api_key, OAuth, or Vertex AI configuration".to_string()
+                    "Gemini provider requires either api_key, OAuth, or Vertex AI configuration"
+                        .to_string(),
                 ));
             };
 
             tracing::debug!("📡 Using Gemini API (streaming): {}", url);
 
             // Build request
-            let mut req_builder = self.client.post(&url).header("Content-Type", "application/json");
+            let mut req_builder = self
+                .client
+                .post(&url)
+                .header("Content-Type", "application/json");
 
             // Add custom headers
             for (key, value) in &self.custom_headers {
@@ -736,7 +773,9 @@ impl AnthropicProvider for GeminiProvider {
             }
 
             // Return the streaming response
-            let stream = response.bytes_stream().map_err(|e| ProviderError::HttpError(e));
+            let stream = response
+                .bytes_stream()
+                .map_err(|e| ProviderError::HttpError(e));
             Ok(Box::pin(stream))
         }
     }
@@ -922,9 +961,9 @@ struct GeminiError {
 #[serde(tag = "@type")]
 enum GeminiErrorDetail {
     #[serde(rename = "type.googleapis.com/google.rpc.RetryInfo")]
-    RetryInfo { 
+    RetryInfo {
         #[serde(rename = "retryDelay")]
-        retry_delay: String 
+        retry_delay: String,
     },
     #[serde(rename = "type.googleapis.com/google.rpc.ErrorInfo")]
     ErrorInfo {
@@ -940,9 +979,15 @@ enum GeminiErrorDetail {
 /// Parse retry delay from Google's duration format (e.g., "3.020317815s", "60s", "900ms")
 fn parse_retry_delay(duration: &str) -> Option<std::time::Duration> {
     if let Some(ms_str) = duration.strip_suffix("ms") {
-        ms_str.parse::<f64>().ok().map(|ms| std::time::Duration::from_millis(ms as u64))
+        ms_str
+            .parse::<f64>()
+            .ok()
+            .map(|ms| std::time::Duration::from_millis(ms as u64))
     } else if let Some(s_str) = duration.strip_suffix("s") {
-        s_str.parse::<f64>().ok().map(|s| std::time::Duration::from_secs_f64(s))
+        s_str
+            .parse::<f64>()
+            .ok()
+            .map(|s| std::time::Duration::from_secs_f64(s))
     } else {
         None
     }
@@ -961,20 +1006,31 @@ fn extract_retry_delay(error_text: &str) -> Option<std::time::Duration> {
                 }
             }
         }
-        
+
         // Check for RATE_LIMIT_EXCEEDED in ErrorInfo
         for detail in &error_response.error.details {
-            if let GeminiErrorDetail::ErrorInfo { reason, domain, metadata } = detail {
-                if reason == "RATE_LIMIT_EXCEEDED" && domain.contains("cloudcode-pa.googleapis.com") {
+            if let GeminiErrorDetail::ErrorInfo {
+                reason,
+                domain,
+                metadata,
+            } = detail
+            {
+                if reason == "RATE_LIMIT_EXCEEDED" && domain.contains("cloudcode-pa.googleapis.com")
+                {
                     // Try to get quotaResetDelay from metadata
                     if let Some(quota_reset) = metadata.get("quotaResetDelay") {
                         if let Some(delay) = parse_retry_delay(quota_reset) {
-                            tracing::info!("⏱️  Rate limit hit (RATE_LIMIT_EXCEEDED), will retry after {:?}", delay);
+                            tracing::info!(
+                                "⏱️  Rate limit hit (RATE_LIMIT_EXCEEDED), will retry after {:?}",
+                                delay
+                            );
                             return Some(delay);
                         }
                     }
                     // Default to 10 seconds if no delay specified
-                    tracing::info!("⏱️  Rate limit hit (RATE_LIMIT_EXCEEDED), will retry after 10s");
+                    tracing::info!(
+                        "⏱️  Rate limit hit (RATE_LIMIT_EXCEEDED), will retry after 10s"
+                    );
                     return Some(std::time::Duration::from_secs(10));
                 }
             }

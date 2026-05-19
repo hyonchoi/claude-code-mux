@@ -1,10 +1,10 @@
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 
 /// OAuth token information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,10 +53,8 @@ impl TokenStore {
     /// Loads existing tokens from file if it exists
     pub fn new(file_path: PathBuf) -> Result<Self> {
         let tokens = if file_path.exists() {
-            let content = fs::read_to_string(&file_path)
-                .context("Failed to read token file")?;
-            serde_json::from_str(&content)
-                .context("Failed to parse token file")?
+            let content = fs::read_to_string(&file_path).context("Failed to read token file")?;
+            serde_json::from_str(&content).context("Failed to parse token file")?
         } else {
             HashMap::new()
         };
@@ -70,11 +68,9 @@ impl TokenStore {
     /// Get default token store path
     /// ~/.claude-code-mux/oauth_tokens.json
     pub fn default_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .context("Failed to get home directory")?;
+        let home = dirs::home_dir().context("Failed to get home directory")?;
         let config_dir = home.join(".claude-code-mux");
-        fs::create_dir_all(&config_dir)
-            .context("Failed to create config directory")?;
+        fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
         Ok(config_dir.join("oauth_tokens.json"))
     }
 
@@ -134,11 +130,9 @@ impl TokenStore {
     /// Persist tokens to file
     fn persist(&self) -> Result<()> {
         let tokens = self.tokens.read().unwrap();
-        let json = serde_json::to_string_pretty(&*tokens)
-            .context("Failed to serialize tokens")?;
+        let json = serde_json::to_string_pretty(&*tokens).context("Failed to serialize tokens")?;
 
-        fs::write(&self.file_path, json)
-            .context("Failed to write token file")?;
+        fs::write(&self.file_path, json).context("Failed to write token file")?;
 
         // Set file permissions to 0600 (owner read/write only)
         #[cfg(unix)]

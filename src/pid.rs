@@ -27,7 +27,9 @@ pub fn write_pid() -> io::Result<()> {
 pub fn read_pid() -> io::Result<u32> {
     let pid_file = get_pid_file();
     let pid_str = fs::read_to_string(&pid_file)?;
-    pid_str.trim().parse::<u32>()
+    pid_str
+        .trim()
+        .parse::<u32>()
         .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
 }
 

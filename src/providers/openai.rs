@@ -1,16 +1,18 @@
-use super::{AnthropicProvider, AuthType, ProviderResponse, ContentBlock, Usage, error::ProviderError};
-use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse, MessageContent};
+use super::{
+    error::ProviderError, AnthropicProvider, AuthType, ContentBlock, ProviderResponse, Usage,
+};
 use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
+use crate::models::{AnthropicRequest, CountTokensRequest, CountTokensResponse, MessageContent};
 use async_trait::async_trait;
-use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
-use std::num::NonZeroU32;
-use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
-use std::pin::Pin;
-use futures::stream::Stream;
+use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
-use base64::{Engine as _, engine::general_purpose};
+use futures::stream::Stream;
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::num::NonZeroU32;
+use std::pin::Pin;
+use std::sync::Arc;
 use tokio::time::{timeout, Duration, Instant};
 
 /// Official Codex instructions from OpenAI
@@ -351,32 +353,46 @@ impl OpenAIProvider {
                 if i + 1 < lines.len() {
                     let data_line = lines[i + 1];
                     if data_line.starts_with("data: ") {
-                        let json_str = &data_line[6..];  // Skip "data: "
+                        let json_str = &data_line[6..]; // Skip "data: "
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
                             // Extract both reasoning and message from response.output array
                             // Note: Codex models have reasoning at output[0], message at output[1]
                             if let Some(response) = json.get("response") {
-                                if let Some(output) = response.get("output").and_then(|v| v.as_array()) {
+                                if let Some(output) =
+                                    response.get("output").and_then(|v| v.as_array())
+                                {
                                     let mut content_blocks = Vec::new();
 
                                     // Extract reasoning and message in order
                                     for output_item in output {
-                                        if let Some(output_type) = output_item.get("type").and_then(|v| v.as_str()) {
-                                            if let Some(content) = output_item.get("content").and_then(|v| v.as_array()) {
+                                        if let Some(output_type) =
+                                            output_item.get("type").and_then(|v| v.as_str())
+                                        {
+                                            if let Some(content) = output_item
+                                                .get("content")
+                                                .and_then(|v| v.as_array())
+                                            {
                                                 if let Some(first_content) = content.first() {
-                                                    if let Some(text) = first_content.get("text").and_then(|v| v.as_str()) {
+                                                    if let Some(text) = first_content
+                                                        .get("text")
+                                                        .and_then(|v| v.as_str())
+                                                    {
                                                         match output_type {
                                                             "reasoning" => {
                                                                 // Convert OpenAI reasoning to Claude thinking block
-                                                                content_blocks.push(ContentBlock::Thinking {
-                                                                    thinking: text.to_string(),
-                                                                    signature: String::new(), // OpenAI doesn't have signature
-                                                                });
+                                                                content_blocks.push(
+                                                                    ContentBlock::Thinking {
+                                                                        thinking: text.to_string(),
+                                                                        signature: String::new(), // OpenAI doesn't have signature
+                                                                    },
+                                                                );
                                                             }
                                                             "message" => {
-                                                                content_blocks.push(ContentBlock::Text {
-                                                                    text: text.to_string(),
-                                                                });
+                                                                content_blocks.push(
+                                                                    ContentBlock::Text {
+                                                                        text: text.to_string(),
+                                                                    },
+                                                                );
                                                             }
                                                             _ => {}
                                                         }
@@ -404,7 +420,10 @@ impl OpenAIProvider {
     }
 
     /// Transform Anthropic request to OpenAI Responses API format
-    fn transform_to_responses_request(&self, request: &AnthropicRequest) -> Result<OpenAIResponsesRequest, ProviderError> {
+    fn transform_to_responses_request(
+        &self,
+        request: &AnthropicRequest,
+    ) -> Result<OpenAIResponsesRequest, ProviderError> {
         // Use official Codex instructions (system message is handled separately in user messages if needed)
         let instructions = CODEX_INSTRUCTIONS.to_string();
 
@@ -415,12 +434,11 @@ impl OpenAIProvider {
         if let Some(ref system) = request.system {
             let system_text = match system {
                 crate::models::SystemPrompt::Text(text) => text.clone(),
-                crate::models::SystemPrompt::Blocks(blocks) => {
-                    blocks.iter()
-                        .map(|b| b.text.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
+                crate::models::SystemPrompt::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| b.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             };
             // Prepend system message as user message
             messages.push(OpenAIResponsesMessage {
@@ -434,12 +452,11 @@ impl OpenAIProvider {
             let content = match &msg.content {
                 MessageContent::Text(text) => text.clone(),
                 MessageContent::Blocks(blocks) => {
-                    let text = blocks.iter()
-                        .filter_map(|block| {
-                            match block {
-                                crate::models::ContentBlock::Text { text } => Some(text.clone()),
-                                _ => None,
-                            }
+                    let text = blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            crate::models::ContentBlock::Text { text } => Some(text.clone()),
+                            _ => None,
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
@@ -454,7 +471,7 @@ impl OpenAIProvider {
 
             messages.push(OpenAIResponsesMessage {
                 role: msg.role.clone(),
-                content: Some(content),  // Always provide content
+                content: Some(content), // Always provide content
             });
         }
 
@@ -462,8 +479,8 @@ impl OpenAIProvider {
             model: request.model.clone(),
             input: OpenAIResponsesInput::Messages(messages),
             instructions,
-            store: false,  // Required: ChatGPT backend requires store=false
-            stream: true,  // Required: ChatGPT Codex requires stream=true
+            store: false, // Required: ChatGPT backend requires store=false
+            stream: true, // Required: ChatGPT Codex requires stream=true
         })
     }
 
@@ -500,7 +517,10 @@ impl OpenAIProvider {
             "https://openrouter.ai/api/v1".to_string(),
             models,
             vec![
-                ("HTTP-Referer".to_string(), "https://github.com/bahkchanhee/claude-code-mux".to_string()),
+                (
+                    "HTTP-Referer".to_string(),
+                    "https://github.com/bahkchanhee/claude-code-mux".to_string(),
+                ),
                 ("X-Title".to_string(), "Claude Code Mux".to_string()),
             ],
             None,
@@ -624,7 +644,7 @@ impl OpenAIProvider {
                 // Validate passthrough token format (reject control characters)
                 if token.chars().any(|c| c.is_control()) {
                     return Err(ProviderError::AuthError(
-                        "Bearer token contains invalid characters".to_string()
+                        "Bearer token contains invalid characters".to_string(),
                     ));
                 }
                 return Ok(token.to_string());
@@ -638,7 +658,10 @@ impl OpenAIProvider {
             if let Some(ref token_store) = self.token_store {
                 if let Some(token) = token_store.get(oauth_provider_id) {
                     if token.needs_refresh() {
-                        tracing::info!("🔄 Token for '{}' needs refresh, refreshing...", oauth_provider_id);
+                        tracing::info!(
+                            "🔄 Token for '{}' needs refresh, refreshing...",
+                            oauth_provider_id
+                        );
                         let config = OAuthConfig::openai_codex();
                         let oauth_client = OAuthClient::new(config, token_store.clone());
                         match oauth_client.refresh_token(oauth_provider_id).await {
@@ -649,7 +672,8 @@ impl OpenAIProvider {
                             Err(e) => {
                                 tracing::error!("❌ Failed to refresh token: {}", e);
                                 return Err(ProviderError::AuthError(format!(
-                                    "Failed to refresh OAuth token: {}", e
+                                    "Failed to refresh OAuth token: {}",
+                                    e
                                 )));
                             }
                         }
@@ -664,7 +688,7 @@ impl OpenAIProvider {
                 }
             } else {
                 return Err(ProviderError::AuthError(
-                    "OAuth provider configured but TokenStore not available".to_string()
+                    "OAuth provider configured but TokenStore not available".to_string(),
                 ));
             }
         }
@@ -699,19 +723,21 @@ impl OpenAIProvider {
     }
 
     /// Transform Anthropic request to OpenAI format
-    pub(crate) fn transform_request(&self, request: &AnthropicRequest) -> Result<OpenAIRequest, ProviderError> {
+    pub(crate) fn transform_request(
+        &self,
+        request: &AnthropicRequest,
+    ) -> Result<OpenAIRequest, ProviderError> {
         let mut openai_messages = Vec::new();
 
         // Add system message if present
         if let Some(ref system) = request.system {
             let system_text = match system {
                 crate::models::SystemPrompt::Text(text) => text.clone(),
-                crate::models::SystemPrompt::Blocks(blocks) => {
-                    blocks.iter()
-                        .map(|b| b.text.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
+                crate::models::SystemPrompt::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| b.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             };
             openai_messages.push(OpenAIMessage {
                 role: "system".to_string(),
@@ -737,9 +763,14 @@ impl OpenAIProvider {
                 }
                 MessageContent::Blocks(blocks) => {
                     // Check if we have any tool results - they need separate messages
-                    let tool_results: Vec<_> = blocks.iter()
+                    let tool_results: Vec<_> = blocks
+                        .iter()
                         .filter_map(|block| {
-                            if let crate::models::ContentBlock::ToolResult { tool_use_id, content } = block {
+                            if let crate::models::ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                            } = block
+                            {
                                 Some((tool_use_id.clone(), content.to_string()))
                             } else {
                                 None
@@ -748,9 +779,11 @@ impl OpenAIProvider {
                         .collect();
 
                     // Extract tool_calls from ToolUse blocks
-                    let tool_calls: Vec<_> = blocks.iter()
+                    let tool_calls: Vec<_> = blocks
+                        .iter()
                         .filter_map(|block| {
-                            if let crate::models::ContentBlock::ToolUse { id, name, input } = block {
+                            if let crate::models::ContentBlock::ToolUse { id, name, input } = block
+                            {
                                 Some(OpenAIToolCall {
                                     id: id.clone(),
                                     r#type: "function".to_string(),
@@ -770,20 +803,19 @@ impl OpenAIProvider {
                     for block in blocks {
                         match block {
                             crate::models::ContentBlock::Text { text } => {
-                                content_parts.push(OpenAIContentPart::Text {
-                                    text: text.clone(),
-                                });
+                                content_parts.push(OpenAIContentPart::Text { text: text.clone() });
                             }
                             crate::models::ContentBlock::Image { source } => {
                                 // Convert Anthropic image format to OpenAI format
                                 let url = if source.r#type == "base64" {
                                     // data:image/{media_type};base64,{data}
-                                    let media_type = source.media_type.as_ref()
+                                    let media_type = source
+                                        .media_type
+                                        .as_ref()
                                         .map(|s| s.as_str())
                                         .unwrap_or("image/png");
-                                    let data = source.data.as_ref()
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("");
+                                    let data =
+                                        source.data.as_ref().map(|s| s.as_str()).unwrap_or("");
                                     format!("data:{};base64,{}", media_type, data)
                                 } else if let Some(url) = &source.url {
                                     url.clone()
@@ -826,7 +858,11 @@ impl OpenAIProvider {
                             role: msg.role.clone(),
                             content,
                             reasoning: None,
-                            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                            tool_calls: if tool_calls.is_empty() {
+                                None
+                            } else {
+                                Some(tool_calls)
+                            },
                             tool_call_id: None,
                         });
                     }
@@ -847,7 +883,8 @@ impl OpenAIProvider {
 
         // Transform tools if present
         let tools = request.tools.as_ref().map(|anthropic_tools| {
-            anthropic_tools.iter()
+            anthropic_tools
+                .iter()
                 .filter_map(|tool| {
                     // Anthropic tools have name, description, input_schema
                     Some(OpenAITool {
@@ -877,7 +914,10 @@ impl OpenAIProvider {
 
     /// Transform OpenAI response to Anthropic format
     pub(crate) fn transform_response(&self, response: OpenAIResponse) -> ProviderResponse {
-        let choice = response.choices.into_iter().next()
+        let choice = response
+            .choices
+            .into_iter()
+            .next()
             .expect("OpenAI response must have at least one choice");
 
         // Extract text from content or reasoning (for GLM models via Cerebras)
@@ -886,7 +926,8 @@ impl OpenAIProvider {
                 OpenAIContent::String(s) => s,
                 OpenAIContent::Parts(parts) => {
                     // Extract text from all text parts
-                    parts.iter()
+                    parts
+                        .iter()
                         .filter_map(|part| {
                             if let OpenAIContentPart::Text { text } = part {
                                 Some(text.clone())
@@ -915,8 +956,10 @@ impl OpenAIProvider {
                     continue;
                 }
 
-                let input = serde_json::from_str(&tool_call.function.arguments)
-                    .unwrap_or_else(|_| serde_json::Value::String(tool_call.function.arguments.clone()));
+                let input =
+                    serde_json::from_str(&tool_call.function.arguments).unwrap_or_else(|_| {
+                        serde_json::Value::String(tool_call.function.arguments.clone())
+                    });
 
                 content.push(ContentBlock::ToolUse {
                     id: tool_call.id,
@@ -932,13 +975,16 @@ impl OpenAIProvider {
             });
         }
 
-        let stop_reason = choice.finish_reason.as_ref().map(|reason| match reason.as_str() {
-            "stop" => "end_turn".to_string(),
-            "length" => "max_tokens".to_string(),
-            "tool_calls" => "tool_use".to_string(),
-            "content_filter" => "stop_sequence".to_string(),
-            _ => reason.clone(),
-        });
+        let stop_reason = choice
+            .finish_reason
+            .as_ref()
+            .map(|reason| match reason.as_str() {
+                "stop" => "end_turn".to_string(),
+                "length" => "max_tokens".to_string(),
+                "tool_calls" => "tool_use".to_string(),
+                "content_filter" => "stop_sequence".to_string(),
+                _ => reason.clone(),
+            });
 
         ProviderResponse {
             id: response.id,
@@ -958,11 +1004,14 @@ impl OpenAIProvider {
     /// Transform Responses API response to Anthropic format
     fn transform_responses_response(&self, response: OpenAIResponsesResponse) -> ProviderResponse {
         // Extract text from output messages
-        let text = response.output.iter()
+        let text = response
+            .output
+            .iter()
             .filter(|output| output.output_type == "message")
             .filter_map(|output| output.content.as_ref())
             .flat_map(|content_blocks| {
-                content_blocks.iter()
+                content_blocks
+                    .iter()
                     .filter(|block| block.block_type == "output_text")
                     .filter_map(|block| block.text.clone())
             })
@@ -973,9 +1022,7 @@ impl OpenAIProvider {
             id: response.id,
             r#type: "message".to_string(),
             role: "assistant".to_string(),
-            content: vec![ContentBlock::Text {
-                text,
-            }],
+            content: vec![ContentBlock::Text { text }],
             model: response.model,
             stop_reason: Some("end_turn".to_string()),
             stop_sequence: None,
@@ -989,7 +1036,10 @@ impl OpenAIProvider {
 
 #[async_trait]
 impl AnthropicProvider for OpenAIProvider {
-    async fn send_message(&self, request: AnthropicRequest) -> Result<ProviderResponse, ProviderError> {
+    async fn send_message(
+        &self,
+        request: AnthropicRequest,
+    ) -> Result<ProviderResponse, ProviderError> {
         self.await_rate_limit_permit().await?;
 
         // Get authentication token (API key or OAuth)
@@ -1007,9 +1057,9 @@ impl AnthropicProvider for OpenAIProvider {
         // - OAuth: Always use /codex/responses for all models
         // - API Key: Only use /responses for models containing "codex"
         let use_responses_api = if self.is_oauth() {
-            true  // OAuth always uses Codex endpoint
+            true // OAuth always uses Codex endpoint
         } else {
-            Self::is_codex_model(&request.model)  // API Key only for codex models
+            Self::is_codex_model(&request.model) // API Key only for codex models
         };
 
         if use_responses_api {
@@ -1024,9 +1074,14 @@ impl AnthropicProvider for OpenAIProvider {
             };
             let url = format!("{}{}", base_url, endpoint);
 
-            tracing::debug!("Using {} endpoint for Codex model: {}", endpoint, request.model);
+            tracing::debug!(
+                "Using {} endpoint for Codex model: {}",
+                endpoint,
+                request.model
+            );
 
-            let mut req_builder = self.client
+            let mut req_builder = self
+                .client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", auth_value))
                 .header("Content-Type", "application/json")
@@ -1049,7 +1104,10 @@ impl AnthropicProvider for OpenAIProvider {
                         .header("sec-fetch-dest", "empty")
                         .header("sec-fetch-mode", "cors")
                         .header("sec-fetch-site", "same-origin");
-                    tracing::debug!("🔐 Using OAuth Bearer token for ChatGPT Codex on {}", self.name);
+                    tracing::debug!(
+                        "🔐 Using OAuth Bearer token for ChatGPT Codex on {}",
+                        self.name
+                    );
                 }
             }
 
@@ -1058,14 +1116,14 @@ impl AnthropicProvider for OpenAIProvider {
                 req_builder = req_builder.header(key, value);
             }
 
-            let response = req_builder
-                .json(&responses_request)
-                .send()
-                .await?;
+            let response = req_builder.json(&responses_request).send().await?;
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
                 tracing::error!("Responses API error ({}): {}", status, error_text);
                 return Err(ProviderError::ApiError {
                     status,
@@ -1091,7 +1149,7 @@ impl AnthropicProvider for OpenAIProvider {
                 stop_reason: Some("end_turn".to_string()),
                 stop_sequence: None,
                 usage: Usage {
-                    input_tokens: 0,  // SSE doesn't provide token counts
+                    input_tokens: 0, // SSE doesn't provide token counts
                     output_tokens: 0,
                 },
             })
@@ -1100,7 +1158,8 @@ impl AnthropicProvider for OpenAIProvider {
             let openai_request = self.transform_request(&request)?;
             let url = format!("{}/chat/completions", base_url);
 
-            let mut req_builder = self.client
+            let mut req_builder = self
+                .client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", auth_value))
                 .header("Content-Type", "application/json");
@@ -1129,14 +1188,14 @@ impl AnthropicProvider for OpenAIProvider {
                 req_builder = req_builder.header(key, value);
             }
 
-            let response = req_builder
-                .json(&openai_request)
-                .send()
-                .await?;
+            let response = req_builder.json(&openai_request).send().await?;
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
                 return Err(ProviderError::ApiError {
                     status,
                     message: error_text,
@@ -1148,8 +1207,8 @@ impl AnthropicProvider for OpenAIProvider {
             tracing::debug!("OpenAI provider response body: {}", response_text);
 
             // Try to parse the response
-            let openai_response: OpenAIResponse = serde_json::from_str(&response_text)
-                .map_err(|e| {
+            let openai_response: OpenAIResponse =
+                serde_json::from_str(&response_text).map_err(|e| {
                     tracing::error!("Failed to parse OpenAI response: {}", e);
                     tracing::error!("Response body was: {}", response_text);
                     e
@@ -1159,7 +1218,10 @@ impl AnthropicProvider for OpenAIProvider {
         }
     }
 
-    async fn count_tokens(&self, request: CountTokensRequest) -> Result<CountTokensResponse, ProviderError> {
+    async fn count_tokens(
+        &self,
+        request: CountTokensRequest,
+    ) -> Result<CountTokensResponse, ProviderError> {
         // For OpenAI, we'll use tiktoken-rs for local token counting
         // This is a placeholder - actual implementation would use tiktoken
 
@@ -1169,9 +1231,11 @@ impl AnthropicProvider for OpenAIProvider {
         if let Some(ref system) = request.system {
             let system_text = match system {
                 crate::models::SystemPrompt::Text(text) => text.clone(),
-                crate::models::SystemPrompt::Blocks(blocks) => {
-                    blocks.iter().map(|b| b.text.clone()).collect::<Vec<_>>().join("\n")
-                }
+                crate::models::SystemPrompt::Blocks(blocks) => blocks
+                    .iter()
+                    .map(|b| b.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             };
             total_chars += system_text.len();
         }
@@ -1179,23 +1243,20 @@ impl AnthropicProvider for OpenAIProvider {
         for msg in &request.messages {
             let content = match &msg.content {
                 MessageContent::Text(text) => text.clone(),
-                MessageContent::Blocks(blocks) => {
-                    blocks.iter()
-                        .filter_map(|block| {
-                            match block {
-                                crate::models::ContentBlock::Text { text } => Some(text.clone()),
-                                crate::models::ContentBlock::ToolResult { content, .. } => {
-                                    Some(content.to_string())
-                                }
-                                crate::models::ContentBlock::Thinking { thinking, .. } => {
-                                    Some(thinking.clone())
-                                }
-                                _ => None,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        crate::models::ContentBlock::Text { text } => Some(text.clone()),
+                        crate::models::ContentBlock::ToolResult { content, .. } => {
+                            Some(content.to_string())
+                        }
+                        crate::models::ContentBlock::Thinking { thinking, .. } => {
+                            Some(thinking.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             };
             total_chars += content.len();
         }
@@ -1210,7 +1271,8 @@ impl AnthropicProvider for OpenAIProvider {
     async fn send_message_stream(
         &self,
         request: AnthropicRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
+    {
         use futures::stream::TryStreamExt;
 
         self.await_rate_limit_permit().await?;
@@ -1231,7 +1293,10 @@ impl AnthropicProvider for OpenAIProvider {
 
         let (url, request_body) = if is_codex {
             // Use /v1/responses endpoint for Codex models
-            tracing::debug!("Using /v1/responses endpoint for Codex model (streaming): {}", request.model);
+            tracing::debug!(
+                "Using /v1/responses endpoint for Codex model (streaming): {}",
+                request.model
+            );
             let responses_request = self.transform_to_responses_request(&request)?;
             let body = serde_json::to_value(&responses_request)
                 .map_err(|e| ProviderError::SerializationError(e))?;
@@ -1245,7 +1310,8 @@ impl AnthropicProvider for OpenAIProvider {
         };
 
         // Send streaming request
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", auth_value))
             .header("Content-Type", "application/json")
@@ -1258,7 +1324,10 @@ impl AnthropicProvider for OpenAIProvider {
                     .header("chatgpt-account-id", account_id)
                     .header("OpenAI-Beta", "responses=experimental")
                     .header("originator", "codex_cli_rs");
-                tracing::debug!("🔐 Using OAuth Bearer token for ChatGPT Codex streaming on {}", self.name);
+                tracing::debug!(
+                    "🔐 Using OAuth Bearer token for ChatGPT Codex streaming on {}",
+                    self.name
+                );
             }
         } else if self.is_oauth() {
             // For non-Codex OAuth (if needed in the future)
@@ -1268,15 +1337,15 @@ impl AnthropicProvider for OpenAIProvider {
             }
         }
 
-        let response = req_builder
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = req_builder.json(&request_body).send().await?;
 
         // Check for errors
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ProviderError::ApiError {
                 status,
                 message: error_text,
@@ -1285,7 +1354,9 @@ impl AnthropicProvider for OpenAIProvider {
 
         // TODO: Transform OpenAI SSE format to Anthropic SSE format
         // For now, just pass through the stream
-        let stream = response.bytes_stream().map_err(|e| ProviderError::HttpError(e));
+        let stream = response
+            .bytes_stream()
+            .map_err(|e| ProviderError::HttpError(e));
 
         Ok(Box::pin(stream))
     }
@@ -1313,7 +1384,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_auth_header_ignores_override_for_api_key_auth() {
         let provider = make_provider();
-        let result = provider.get_auth_header(Some("caller-token")).await.unwrap();
+        let result = provider
+            .get_auth_header(Some("caller-token"))
+            .await
+            .unwrap();
         assert_eq!(result, "internal-api-key");
     }
 
@@ -1335,7 +1409,10 @@ mod tests {
             None,
             None,
         );
-        let result = provider.get_auth_header(Some("caller-token")).await.unwrap();
+        let result = provider
+            .get_auth_header(Some("caller-token"))
+            .await
+            .unwrap();
         assert_eq!(result, "caller-token");
     }
 
@@ -1387,7 +1464,10 @@ mod tests {
             ContentBlock::ToolUse { id, name, input } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "Bash");
-                assert_eq!(input.get("command").and_then(|v| v.as_str()), Some("echo hi"));
+                assert_eq!(
+                    input.get("command").and_then(|v| v.as_str()),
+                    Some("echo hi")
+                );
             }
             other => panic!("Expected ToolUse block, got {:?}", other),
         }

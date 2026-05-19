@@ -145,12 +145,18 @@ pub async fn poll_for_github_token(
 }
 
 /// Exchange a GitHub OAuth access token for a Copilot bearer token.
-pub async fn exchange_for_copilot_token(client: &Client, github_token: &str) -> Result<CopilotTokenResponse> {
+pub async fn exchange_for_copilot_token(
+    client: &Client,
+    github_token: &str,
+) -> Result<CopilotTokenResponse> {
     fetch_copilot_token(client, github_token).await
 }
 
 /// Refresh an existing Copilot bearer token using the stored GitHub OAuth token.
-pub async fn refresh_copilot_token(client: &Client, github_token: &str) -> Result<CopilotTokenResponse> {
+pub async fn refresh_copilot_token(
+    client: &Client,
+    github_token: &str,
+) -> Result<CopilotTokenResponse> {
     fetch_copilot_token(client, github_token).await
 }
 

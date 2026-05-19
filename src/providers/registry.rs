@@ -287,7 +287,9 @@ impl ProviderRegistry {
                 );
             }
 
-            registry.provider_types.insert(provider_name.clone(), config.provider_type.clone());
+            registry
+                .provider_types
+                .insert(provider_name.clone(), config.provider_type.clone());
             registry.providers.insert(provider_name, Arc::new(provider));
         }
 

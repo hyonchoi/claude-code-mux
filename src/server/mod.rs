@@ -7,6 +7,7 @@ use crate::models::AnthropicRequest;
 use crate::providers::ProviderRegistry;
 use crate::router::Router;
 use axum::{
+    body::Body,
     extract::State,
     http::{header, HeaderMap, Request, StatusCode},
     middleware::{self, Next},
@@ -16,12 +17,11 @@ use axum::{
     },
     routing::{get, post},
     Form, Json, Router as AxumRouter,
-    body::Body,
 };
 use futures::stream::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{trace, debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 // Background Copilot token refresh timing.
 // Threshold must exceed the poll interval so a freshly-refreshed 30-min token is
@@ -42,11 +42,9 @@ fn build_refreshed_copilot_token(
     new_access_token: String,
     new_expires_at_unix: u64,
 ) -> crate::auth::OAuthToken {
-    let expires_at = chrono::DateTime::from_timestamp(
-        new_expires_at_unix.min(i64::MAX as u64) as i64,
-        0,
-    )
-    .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
+    let expires_at =
+        chrono::DateTime::from_timestamp(new_expires_at_unix.min(i64::MAX as u64) as i64, 0)
+            .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30));
     crate::auth::OAuthToken {
         provider_id: original.provider_id.clone(),
         access_token: new_access_token,
@@ -85,14 +83,18 @@ async fn require_api_key(
             .or_else(|| {
                 headers.get("authorization").and_then(|v| {
                     let s = v.to_str().ok()?;
-                    s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer "))
+                    s.strip_prefix("Bearer ")
+                        .or_else(|| s.strip_prefix("bearer "))
                 })
             })
             .unwrap_or("");
 
         // Constant-time comparison to prevent timing side-channel attacks
         if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-            warn!("Request rejected: invalid or missing API key for {}", request.uri().path());
+            warn!(
+                "Request rejected: invalid or missing API key for {}",
+                request.uri().path()
+            );
             return Err(StatusCode::UNAUTHORIZED);
         }
     }
@@ -191,7 +193,8 @@ pub async fn start_server(
         let bg_providers = state.config.providers.clone();
         let bg_client = reqwest::Client::new();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(COPILOT_POLL_SECS));
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(COPILOT_POLL_SECS));
             interval.tick().await; // skip the immediate first tick
             loop {
                 interval.tick().await;
@@ -202,7 +205,9 @@ pub async fn start_server(
                                 match crate::auth::github_copilot::refresh_copilot_token(
                                     &bg_client,
                                     &token.refresh_token,
-                                ).await {
+                                )
+                                .await
+                                {
                                     Ok(resp) => {
                                         let updated = build_refreshed_copilot_token(
                                             &token,
@@ -262,9 +267,18 @@ pub async fn start_server(
             "/api/oauth/tokens/refresh",
             post(oauth_handlers::oauth_refresh_token),
         )
-        .route("/api/oauth/copilot-start", post(oauth_handlers::copilot_start))
-        .route("/api/oauth/copilot-exchange", post(oauth_handlers::copilot_exchange))
-        .layer(middleware::from_fn_with_state(state.clone(), require_api_key));
+        .route(
+            "/api/oauth/copilot-start",
+            post(oauth_handlers::copilot_start),
+        )
+        .route(
+            "/api/oauth/copilot-exchange",
+            post(oauth_handlers::copilot_exchange),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ));
 
     let app = public_routes
         .merge(protected_routes)
@@ -418,9 +432,12 @@ fn redact_provider_api_keys(providers: &serde_json::Value) -> serde_json::Value 
         for provider in arr.iter_mut() {
             if let Some(obj) = provider.as_object_mut() {
                 if let Some(api_key) = obj.remove("api_key") {
-                    obj.insert("api_key_set".to_string(), serde_json::Value::Bool(
-                        !api_key.is_null() && !api_key.as_str().unwrap_or("").is_empty()
-                    ));
+                    obj.insert(
+                        "api_key_set".to_string(),
+                        serde_json::Value::Bool(
+                            !api_key.is_null() && !api_key.as_str().unwrap_or("").is_empty(),
+                        ),
+                    );
                 }
             }
         }
@@ -509,13 +526,21 @@ async fn update_config_json(
                         && !obj.contains_key("api_key")
                     {
                         // Find the matching provider in the current config and restore its key
-                        if let Some(name) = obj.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()) {
+                        if let Some(name) = obj
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string())
+                        {
                             if let Some(toml::Value::Array(current_arr)) = current_providers {
                                 for current in current_arr {
                                     if let toml::Value::Table(t) = current {
                                         if t.get("name").and_then(|v| v.as_str()) == Some(&name) {
-                                            if let Some(toml::Value::String(key)) = t.get("api_key") {
-                                                obj.insert("api_key".to_string(), serde_json::Value::String(key.clone()));
+                                            if let Some(toml::Value::String(key)) = t.get("api_key")
+                                            {
+                                                obj.insert(
+                                                    "api_key".to_string(),
+                                                    serde_json::Value::String(key.clone()),
+                                                );
                                             }
                                             break;
                                         }
@@ -576,7 +601,8 @@ async fn update_config_json(
             if let Some(subagent) = router.get("subagent") {
                 match subagent.as_str() {
                     Some(s) if !s.is_empty() => {
-                        router_table.insert("subagent".to_string(), toml::Value::String(s.to_string()));
+                        router_table
+                            .insert("subagent".to_string(), toml::Value::String(s.to_string()));
                     }
                     _ => {
                         router_table.remove("subagent");
@@ -733,10 +759,7 @@ start "" "{}" start --port {}
 /// Returns true if the named provider should receive passthrough auth.
 /// Only anthropic-type providers with auth_type=passthrough are eligible.
 /// Other providers (copilot, nvidia-nim, apikey/oauth anthropic) use their own auth.
-fn should_use_passthrough_auth(
-    providers: &[crate::providers::ProviderConfig],
-    name: &str,
-) -> bool {
+fn should_use_passthrough_auth(providers: &[crate::providers::ProviderConfig], name: &str) -> bool {
     providers
         .iter()
         .find(|p| p.name == name)
@@ -985,11 +1008,12 @@ async fn handle_openai_chat_completions(
 
                 // Set passthrough auth per-mapping: only passthrough-type anthropic providers
                 // should receive the caller's bearer token; others use their own auth
-                anthropic_request.passthrough_auth = if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
-                    passthrough_token.clone()
-                } else {
-                    None
-                };
+                anthropic_request.passthrough_auth =
+                    if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
+                        passthrough_token.clone()
+                    } else {
+                        None
+                    };
 
                 // Restore original beta header before applying mapping-specific stripping
                 anthropic_request.anthropic_beta_header = original_beta_header.clone();
@@ -1250,11 +1274,12 @@ async fn handle_messages(
                 // Propagate passthrough auth and beta header before stripping, so the
                 // strip logic can see the actual header value (anthropic_beta_header is
                 // #[serde(skip)] and therefore always None after JSON deserialization)
-                anthropic_request.passthrough_auth = if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
-                passthrough_token.clone()
-            } else {
-                None
-            };
+                anthropic_request.passthrough_auth =
+                    if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
+                        passthrough_token.clone()
+                    } else {
+                        None
+                    };
                 anthropic_request.anthropic_beta_header = incoming_beta_header.clone();
 
                 // Strip beta options if configured in the mapping
@@ -1507,7 +1532,6 @@ async fn handle_count_tokens(
         let mut sorted_mappings = model_config.mappings.clone();
         sorted_mappings.sort_by_key(|m| m.priority);
 
-
         // Try each mapping in priority order
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
             info!(
@@ -1525,11 +1549,12 @@ async fn handle_count_tokens(
                 // Update model to actual model name and include passthrough auth if present
                 let mut count_request_for_provider = count_request.clone();
                 count_request_for_provider.model = mapping.actual_model.clone();
-                count_request_for_provider.passthrough_auth = if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
-                    passthrough_token.clone()
-                } else {
-                    None
-                };
+                count_request_for_provider.passthrough_auth =
+                    if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
+                        passthrough_token.clone()
+                    } else {
+                        None
+                    };
 
                 // Call provider's count_tokens
                 match provider.count_tokens(count_request_for_provider).await {
@@ -1577,24 +1602,26 @@ async fn handle_count_tokens(
                 decision.model_name
             );
 
-        // Update model to routed model and include passthrough auth if eligible
-        let mut count_request_for_provider = count_request.clone();
-        count_request_for_provider.model = decision.model_name.clone();
-        // Look up the provider name from [[models]] config to decide passthrough eligibility
-        let provider_name = state.config.models
-            .iter()
-            .find(|m| m.name == decision.model_name)
-            .and_then(|m| m.mappings.first())
-            .map(|m| m.provider.clone());
-        count_request_for_provider.passthrough_auth = if let Some(ref pname) = provider_name {
-            if should_use_passthrough_auth(&state.config.providers, pname) {
-                passthrough_token.clone()
+            // Update model to routed model and include passthrough auth if eligible
+            let mut count_request_for_provider = count_request.clone();
+            count_request_for_provider.model = decision.model_name.clone();
+            // Look up the provider name from [[models]] config to decide passthrough eligibility
+            let provider_name = state
+                .config
+                .models
+                .iter()
+                .find(|m| m.name == decision.model_name)
+                .and_then(|m| m.mappings.first())
+                .map(|m| m.provider.clone());
+            count_request_for_provider.passthrough_auth = if let Some(ref pname) = provider_name {
+                if should_use_passthrough_auth(&state.config.providers, pname) {
+                    passthrough_token.clone()
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
             // Call provider's count_tokens
             let response = provider
@@ -1774,36 +1801,36 @@ mod tests {
                 rate_limit_rpm: None,
                 rate_limit_max_wait_ms: None,
             },
-        ProviderConfig {
-            name: "ant-pt".to_string(),
-            provider_type: "anthropic".to_string(),
-            auth_type: crate::providers::AuthType::Passthrough,
-            supported_beta_options: vec![],
-            api_key: None,
-            oauth_provider: None,
-            project_id: None,
-            location: None,
-            base_url: None,
-            models: vec![],
-            enabled: Some(true),
-            rate_limit_rpm: None,
-            rate_limit_max_wait_ms: None,
-        },
-        ProviderConfig {
-            name: "cop1".to_string(),
-            provider_type: "copilot".to_string(),
-            auth_type: crate::providers::AuthType::OAuth,
-            supported_beta_options: vec![],
-            api_key: None,
-            oauth_provider: Some("copilot".to_string()),
-            project_id: None,
-            location: None,
-            base_url: None,
-            models: vec![],
-            enabled: Some(true),
-            rate_limit_rpm: None,
-            rate_limit_max_wait_ms: None,
-        },
+            ProviderConfig {
+                name: "ant-pt".to_string(),
+                provider_type: "anthropic".to_string(),
+                auth_type: crate::providers::AuthType::Passthrough,
+                supported_beta_options: vec![],
+                api_key: None,
+                oauth_provider: None,
+                project_id: None,
+                location: None,
+                base_url: None,
+                models: vec![],
+                enabled: Some(true),
+                rate_limit_rpm: None,
+                rate_limit_max_wait_ms: None,
+            },
+            ProviderConfig {
+                name: "cop1".to_string(),
+                provider_type: "copilot".to_string(),
+                auth_type: crate::providers::AuthType::OAuth,
+                supported_beta_options: vec![],
+                api_key: None,
+                oauth_provider: Some("copilot".to_string()),
+                project_id: None,
+                location: None,
+                base_url: None,
+                models: vec![],
+                enabled: Some(true),
+                rate_limit_rpm: None,
+                rate_limit_max_wait_ms: None,
+            },
         ]
     }
 

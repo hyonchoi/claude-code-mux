@@ -52,8 +52,9 @@ async fn main() -> anyhow::Result<()> {
     // Get config path (use default if not specified)
     let config_path = match &cli.config {
         Some(path) => path.clone(),
-        None => cli::AppConfig::default_path()
-            .unwrap_or_else(|_| PathBuf::from("config/default.toml")),
+        None => {
+            cli::AppConfig::default_path().unwrap_or_else(|_| PathBuf::from("config/default.toml"))
+        }
     };
 
     // Load configuration
@@ -75,7 +76,10 @@ async fn main() -> anyhow::Result<()> {
 
             tracing::info!("Starting Claude Code Mux on port {}", config.server.port);
             println!("🚀 Claude Code Mux v{}", env!("CARGO_PKG_VERSION"));
-            println!("📡 Starting server on {}:{}", config.server.host, config.server.port);
+            println!(
+                "📡 Starting server on {}:{}",
+                config.server.host, config.server.port
+            );
             println!();
             println!("⚡️ Rust-powered for maximum performance");
             println!("🧠 Intelligent context-aware routing");

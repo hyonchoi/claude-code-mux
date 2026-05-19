@@ -204,9 +204,8 @@ impl Router {
             if !second_block.text.contains("<CCM-SUBAGENT-MODEL>") {
                 return None;
             }
-            let re =
-                Regex::new(r"<CCM-SUBAGENT-MODEL>(.*?)</CCM-SUBAGENT-MODEL>")
-                    .expect("Invalid regex pattern");
+            let re = Regex::new(r"<CCM-SUBAGENT-MODEL>(.*?)</CCM-SUBAGENT-MODEL>")
+                .expect("Invalid regex pattern");
             if let Some(captures) = re.captures(&second_block.text) {
                 if let Some(model_match) = captures.get(1) {
                     let tag_model = model_match.as_str().to_string();

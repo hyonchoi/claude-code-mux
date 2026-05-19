@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use crate::models::{AnthropicRequest, MessageContent, ContentBlock, SystemPrompt};
+use crate::models::{AnthropicRequest, ContentBlock, MessageContent, SystemPrompt};
 use crate::providers::ProviderResponse;
+use serde::{Deserialize, Serialize};
 
 /// OpenAI Chat Completions request format
 #[derive(Debug, Deserialize)]
@@ -89,7 +89,9 @@ pub struct OpenAIUsage {
 }
 
 /// Transform OpenAI request to Anthropic format
-pub fn transform_openai_to_anthropic(openai_req: OpenAIRequest) -> Result<AnthropicRequest, String> {
+pub fn transform_openai_to_anthropic(
+    openai_req: OpenAIRequest,
+) -> Result<AnthropicRequest, String> {
     let mut messages = Vec::new();
     let mut system_prompt: Option<SystemPrompt> = None;
 
@@ -101,18 +103,17 @@ pub fn transform_openai_to_anthropic(openai_req: OpenAIRequest) -> Result<Anthro
                 if let Some(content) = msg.content {
                     let text = match content {
                         OpenAIContent::String(s) => s,
-                        OpenAIContent::Parts(parts) => {
-                            parts.iter()
-                                .filter_map(|p| {
-                                    if let OpenAIContentPart::Text { text } = p {
-                                        Some(text.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        }
+                        OpenAIContent::Parts(parts) => parts
+                            .iter()
+                            .filter_map(|p| {
+                                if let OpenAIContentPart::Text { text } = p {
+                                    Some(text.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
                     };
                     system_prompt = Some(SystemPrompt::Text(text));
                 }
@@ -123,7 +124,8 @@ pub fn transform_openai_to_anthropic(openai_req: OpenAIRequest) -> Result<Anthro
                     match openai_content {
                         OpenAIContent::String(text) => MessageContent::Text(text),
                         OpenAIContent::Parts(parts) => {
-                            let blocks: Vec<ContentBlock> = parts.iter()
+                            let blocks: Vec<ContentBlock> = parts
+                                .iter()
                                 .filter_map(|part| {
                                     match part {
                                         OpenAIContentPart::Text { text } => {
@@ -137,25 +139,28 @@ pub fn transform_openai_to_anthropic(openai_req: OpenAIRequest) -> Result<Anthro
                                                     let header = &image_url.url[..comma_idx];
                                                     let data = &image_url.url[comma_idx + 1..];
 
-                                                    let media_type = if header.contains("image/jpeg") {
-                                                        "image/jpeg"
-                                                    } else if header.contains("image/png") {
-                                                        "image/png"
-                                                    } else if header.contains("image/gif") {
-                                                        "image/gif"
-                                                    } else if header.contains("image/webp") {
-                                                        "image/webp"
-                                                    } else {
-                                                        "image/png" // default
-                                                    };
+                                                    let media_type =
+                                                        if header.contains("image/jpeg") {
+                                                            "image/jpeg"
+                                                        } else if header.contains("image/png") {
+                                                            "image/png"
+                                                        } else if header.contains("image/gif") {
+                                                            "image/gif"
+                                                        } else if header.contains("image/webp") {
+                                                            "image/webp"
+                                                        } else {
+                                                            "image/png" // default
+                                                        };
 
                                                     Some(ContentBlock::Image {
                                                         source: crate::models::ImageSource {
                                                             r#type: "base64".to_string(),
-                                                            media_type: Some(media_type.to_string()),
+                                                            media_type: Some(
+                                                                media_type.to_string(),
+                                                            ),
                                                             data: Some(data.to_string()),
                                                             url: None,
-                                                        }
+                                                        },
                                                     })
                                                 } else {
                                                     None
@@ -168,7 +173,7 @@ pub fn transform_openai_to_anthropic(openai_req: OpenAIRequest) -> Result<Anthro
                                                         media_type: None,
                                                         data: None,
                                                         url: Some(image_url.url.clone()),
-                                                    }
+                                                    },
                                                 })
                                             }
                                         }
@@ -223,12 +228,12 @@ pub fn transform_anthropic_to_openai(
     model: String,
 ) -> OpenAIResponse {
     // Extract text content from content blocks
-    let content = anthropic_resp.content.iter()
-        .filter_map(|block| {
-            match block {
-                ContentBlock::Text { text } => Some(text.clone()),
-                _ => None,
-            }
+    let content = anthropic_resp
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n");

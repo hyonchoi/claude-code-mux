@@ -35,7 +35,10 @@ mod tests {
     #[test]
     fn test_validate_supported_options() {
         let beta_options = vec!["vision-2024-10-22".to_string()];
-        let supported = vec!["vision-2024-10-22".to_string(), "thinking-2024-11-20".to_string()];
+        let supported = vec![
+            "vision-2024-10-22".to_string(),
+            "thinking-2024-11-20".to_string(),
+        ];
         let result = validate_anthropic_beta(&beta_options, &supported, "claude-opus");
         assert!(result.is_ok());
     }

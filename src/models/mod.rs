@@ -65,7 +65,6 @@ pub struct SystemBlock {
     pub cache_control: Option<serde_json::Value>,
 }
 
-
 /// Tool result content can be string or array of content blocks
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -79,15 +78,14 @@ impl ToolResultContent {
     pub fn to_string(&self) -> String {
         match self {
             ToolResultContent::Text(s) => s.clone(),
-            ToolResultContent::Blocks(blocks) => {
-                blocks.iter()
-                    .filter_map(|block| match block {
-                        ToolResultBlock::Text { text } => Some(text.clone()),
-                        ToolResultBlock::Image { .. } => Some("[Image]".to_string()),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            ToolResultContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ToolResultBlock::Text { text } => Some(text.clone()),
+                    ToolResultBlock::Image { .. } => Some("[Image]".to_string()),
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 }
@@ -109,9 +107,7 @@ pub enum ContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image")]
-    Image {
-        source: ImageSource,
-    },
+    Image { source: ImageSource },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -124,10 +120,7 @@ pub enum ContentBlock {
         content: ToolResultContent,
     },
     #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-        signature: String,
-    },
+    Thinking { thinking: String, signature: String },
 }
 
 /// Image source for vision API

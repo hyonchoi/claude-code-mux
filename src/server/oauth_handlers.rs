@@ -7,10 +7,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
 use crate::auth::github_copilot::{
-    start_device_flow, poll_github_token_once, exchange_for_copilot_token, PollResult,
+    exchange_for_copilot_token, poll_github_token_once, start_device_flow, PollResult,
 };
+use crate::auth::{OAuthClient, OAuthConfig, TokenStore};
 use reqwest::Client;
 
 use super::AppState;
@@ -85,10 +85,13 @@ pub async fn oauth_authorize(
         "console" => OAuthConfig::anthropic_console(),
         "openai-codex" => OAuthConfig::openai_codex(),
         "gemini" => OAuthConfig::gemini(),
-        _ => return Err((
-            StatusCode::BAD_REQUEST,
-            "Invalid oauth_type. Must be 'max', 'console', 'openai-codex', or 'gemini'".to_string()
-        )),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Invalid oauth_type. Must be 'max', 'console', 'openai-codex', or 'gemini'"
+                    .to_string(),
+            ))
+        }
     };
 
     let oauth_client = OAuthClient::new(config, state.token_store.clone());
@@ -114,8 +117,11 @@ pub async fn oauth_exchange(
     State(state): State<Arc<AppState>>,
     Json(req): Json<OAuthExchangeRequest>,
 ) -> Result<Json<OAuthExchangeResponse>, (StatusCode, String)> {
-    tracing::info!("📥 OAuth exchange request: provider_id={}, oauth_type={:?}",
-        req.provider_id, req.oauth_type);
+    tracing::info!(
+        "📥 OAuth exchange request: provider_id={}, oauth_type={:?}",
+        req.provider_id,
+        req.oauth_type
+    );
 
     // Determine OAuth config based on oauth_type if provided, otherwise fall back to provider_id
     let config = if let Some(ref oauth_type) = req.oauth_type {
@@ -124,14 +130,17 @@ pub async fn oauth_exchange(
             "gemini" => OAuthConfig::gemini(),
             "console" => OAuthConfig::anthropic_console(),
             "max" => OAuthConfig::anthropic(),
-            _ => return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Invalid oauth_type: {}", oauth_type)
-            )),
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid oauth_type: {}", oauth_type),
+                ))
+            }
         }
-    } else if req.provider_id.to_lowercase().contains("openai") ||
-              req.provider_id.to_lowercase().contains("codex") ||
-              req.provider_id.to_lowercase().contains("chatgpt") {
+    } else if req.provider_id.to_lowercase().contains("openai")
+        || req.provider_id.to_lowercase().contains("codex")
+        || req.provider_id.to_lowercase().contains("chatgpt")
+    {
         OAuthConfig::openai_codex()
     } else {
         OAuthConfig::anthropic()
@@ -143,18 +152,24 @@ pub async fn oauth_exchange(
     let mut token = oauth_client
         .exchange_code(&req.code, &req.verifier, &req.provider_id)
         .await
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to exchange code: {}", e)
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to exchange code: {}", e),
+            )
+        })?;
 
     // For Gemini providers, call loadCodeAssist to get project ID
-    let is_gemini = req.oauth_type.as_deref() == Some("gemini") ||
-                    req.provider_id.to_lowercase().contains("gemini") ||
-                    req.provider_id.to_lowercase().contains("google");
+    let is_gemini = req.oauth_type.as_deref() == Some("gemini")
+        || req.provider_id.to_lowercase().contains("gemini")
+        || req.provider_id.to_lowercase().contains("google");
 
-    tracing::info!("🔍 Checking if Gemini provider: is_gemini={}, oauth_type={:?}, provider_id={}",
-        is_gemini, req.oauth_type, req.provider_id);
+    tracing::info!(
+        "🔍 Checking if Gemini provider: is_gemini={}, oauth_type={:?}, provider_id={}",
+        is_gemini,
+        req.oauth_type,
+        req.provider_id
+    );
 
     if is_gemini {
         tracing::info!("🔍 Gemini provider detected, calling loadCodeAssist to get project ID");
@@ -164,11 +179,12 @@ pub async fn oauth_exchange(
                 tracing::info!("✅ Got project ID from loadCodeAssist: {}", project_id);
                 token.project_id = Some(project_id);
                 // Save updated token with project_id
-                state.token_store.save(token.clone())
-                    .map_err(|e| (
+                state.token_store.save(token.clone()).map_err(|e| {
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to save token with project_id: {}", e)
-                    ))?;
+                        format!("Failed to save token with project_id: {}", e),
+                    )
+                })?;
             }
             Err(e) => {
                 tracing::warn!("⚠️ No project ID available: {}", e);
@@ -216,12 +232,12 @@ pub async fn oauth_delete_token(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeleteTokenRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    state.token_store
-        .remove(&req.provider_id)
-        .map_err(|e| (
+    state.token_store.remove(&req.provider_id).map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to delete token: {}", e)
-        ))?;
+            format!("Failed to delete token: {}", e),
+        )
+    })?;
 
     Ok(Json(serde_json::json!({
         "success": true,
@@ -235,12 +251,14 @@ pub async fn oauth_refresh_token(
     Json(req): Json<DeleteTokenRequest>,
 ) -> Result<Json<OAuthExchangeResponse>, (StatusCode, String)> {
     // Determine OAuth config based on provider_id
-    let config = if req.provider_id.to_lowercase().contains("openai") ||
-                     req.provider_id.to_lowercase().contains("codex") ||
-                     req.provider_id.to_lowercase().contains("chatgpt") {
+    let config = if req.provider_id.to_lowercase().contains("openai")
+        || req.provider_id.to_lowercase().contains("codex")
+        || req.provider_id.to_lowercase().contains("chatgpt")
+    {
         OAuthConfig::openai_codex()
-    } else if req.provider_id.to_lowercase().contains("gemini") ||
-              req.provider_id.to_lowercase().contains("google") {
+    } else if req.provider_id.to_lowercase().contains("gemini")
+        || req.provider_id.to_lowercase().contains("google")
+    {
         OAuthConfig::gemini()
     } else {
         OAuthConfig::anthropic()
@@ -251,10 +269,12 @@ pub async fn oauth_refresh_token(
     let token = oauth_client
         .refresh_token(&req.provider_id)
         .await
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to refresh token: {}", e)
-        ))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to refresh token: {}", e),
+            )
+        })?;
 
     Ok(Json(OAuthExchangeResponse {
         success: true,
@@ -283,15 +303,16 @@ fn html_escape(s: &str) -> String {
 }
 
 /// OAuth callback handler - displays the authorization code to the user
-pub async fn oauth_callback(
-    Query(params): Query<OAuthCallbackQuery>,
-) -> Html<String> {
+pub async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> Html<String> {
     // Check for errors
     if let Some(error) = params.error {
-        let error_desc = params.error_description.unwrap_or_else(|| "Unknown error".to_string());
+        let error_desc = params
+            .error_description
+            .unwrap_or_else(|| "Unknown error".to_string());
         let error = html_escape(&error);
         let error_desc = html_escape(&error_desc);
-        return Html(format!(r#"
+        return Html(format!(
+            r#"
 <!DOCTYPE html>
 <html>
 <head>
@@ -344,14 +365,18 @@ pub async fn oauth_callback(
     </div>
 </body>
 </html>
-"#));
+"#
+        ));
     }
 
     // Extract code (state is not used for token exchange, verifier is stored in frontend)
-    let code = params.code.unwrap_or_else(|| "No code received".to_string());
+    let code = params
+        .code
+        .unwrap_or_else(|| "No code received".to_string());
     let code = html_escape(&code);
 
-    Html(format!(r#"
+    Html(format!(
+        r#"
 <!DOCTYPE html>
 <html>
 <head>
@@ -491,7 +516,8 @@ pub async fn oauth_callback(
     </script>
 </body>
 </html>
-"#))
+"#
+    ))
 }
 
 // ── Copilot device code flow ─────────────────────────────────────────────────
@@ -526,7 +552,10 @@ pub struct CopilotExchangeResponse {
 pub async fn copilot_start() -> Result<Json<CopilotStartResponse>, (StatusCode, String)> {
     let client = Client::new();
     let device_resp = start_device_flow(&client).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start device flow: {}", e))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to start device flow: {}", e),
+        )
     })?;
 
     Ok(Json(CopilotStartResponse {
@@ -548,25 +577,36 @@ pub async fn copilot_exchange(
     let (poll_result, updated_interval) = poll_github_token_once(&client, &req.device_code, 5)
         .await
         .map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Polling error: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Polling error: {}", e),
+            )
         })?;
 
     match poll_result {
         PollResult::Success(github_token) => {
-            let copilot_token = exchange_for_copilot_token(&client, &github_token).await.map_err(|e| {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Copilot token exchange failed: {}", e))
-            })?;
+            let copilot_token = exchange_for_copilot_token(&client, &github_token)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Copilot token exchange failed: {}", e),
+                    )
+                })?;
 
             let now_ts = chrono::Utc::now().timestamp() as u64;
-                let max_ts = now_ts + 86400;
-                let expires_ts = copilot_token.expires_at;
-                let expires_at = if expires_ts > now_ts && expires_ts <= max_ts {
-                    chrono::DateTime::from_timestamp(expires_ts as i64, 0)
-                        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30))
-                } else {
-                    tracing::warn!("Copilot token expires_at ({}) out of valid range, using 30min default", expires_ts);
-                    chrono::Utc::now() + chrono::Duration::minutes(30)
-                };
+            let max_ts = now_ts + 86400;
+            let expires_ts = copilot_token.expires_at;
+            let expires_at = if expires_ts > now_ts && expires_ts <= max_ts {
+                chrono::DateTime::from_timestamp(expires_ts as i64, 0)
+                    .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::minutes(30))
+            } else {
+                tracing::warn!(
+                    "Copilot token expires_at ({}) out of valid range, using 30min default",
+                    expires_ts
+                );
+                chrono::Utc::now() + chrono::Duration::minutes(30)
+            };
 
             let oauth_token = crate::auth::OAuthToken {
                 provider_id: req.provider_id.clone(),
@@ -578,10 +618,16 @@ pub async fn copilot_exchange(
             };
 
             state.token_store.save(oauth_token).map_err(|e| {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save token: {}", e))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to save token: {}", e),
+                )
             })?;
 
-            tracing::info!("Copilot authentication successful for '{}'", req.provider_id);
+            tracing::info!(
+                "Copilot authentication successful for '{}'",
+                req.provider_id
+            );
 
             Ok(Json(CopilotExchangeResponse {
                 status: "success".to_string(),

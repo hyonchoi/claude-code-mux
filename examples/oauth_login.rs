@@ -1,5 +1,5 @@
 //! OAuth Login Example
-//! 
+//!
 //! This example shows how to authenticate with Claude Pro/Max using OAuth.
 //! Run with: cargo run --example oauth_login
 
