@@ -68,6 +68,11 @@ impl CopilotProvider {
             let copilot_resp = refresh_copilot_token(&self.client, &github_token)
                 .await
                 .map_err(|e| {
+                    tracing::warn!(
+                        "Copilot token refresh failed for '{}': {}",
+                        self.name,
+                        e
+                    );
                     ProviderError::AuthError(format!("Failed to refresh Copilot token: {}", e))
                 })?;
 
@@ -87,6 +92,11 @@ impl CopilotProvider {
             };
 
             token_store.save(updated_token).map_err(|e| {
+                tracing::warn!(
+                    "Failed to save refreshed Copilot token for '{}': {}",
+                    self.name,
+                    e
+                );
                 ProviderError::AuthError(format!("Failed to save refreshed token: {}", e))
             })?;
 
@@ -180,6 +190,11 @@ impl AnthropicProvider for CopilotProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
+            tracing::error!(
+                "Copilot API error (non-streaming): status={}, body={}",
+                status,
+                error_text
+            );
             return Err(ProviderError::ApiError {
                 status,
                 message: error_text,
@@ -187,12 +202,24 @@ impl AnthropicProvider for CopilotProvider {
         }
 
         let response_text = response.text().await.map_err(ProviderError::HttpError)?;
-        tracing::debug!("Copilot provider response ({} bytes): {}", response_text.len(), response_text);
+        tracing::debug!(
+            "Copilot provider response ({} bytes): {}",
+            response_text.len(),
+            response_text
+        );
 
         let openai_response: OpenAIResponse =
-            serde_json::from_str(&response_text).map_err(|e| ProviderError::ApiError {
-                status: 500,
-                message: e.to_string(),
+            serde_json::from_str(&response_text).map_err(|e| {
+                tracing::error!(
+                    "Copilot response JSON parse error: {}. Response text ({} bytes): {}",
+                    e,
+                    response_text.len(),
+                    response_text
+                );
+                ProviderError::ApiError {
+                    status: 500,
+                    message: e.to_string(),
+                }
             })?;
 
         Ok(delegate.transform_response(openai_response))
@@ -267,6 +294,11 @@ impl AnthropicProvider for CopilotProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
+            tracing::error!(
+                "Copilot API error (streaming): status={}, body={}",
+                status,
+                error_text
+            );
             return Err(ProviderError::ApiError {
                 status,
                 message: error_text,

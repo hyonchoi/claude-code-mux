@@ -62,6 +62,11 @@ pub async fn start_device_flow(client: &Client) -> Result<DeviceCodeResponse> {
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            "GitHub device code request failed: status={}, body={}",
+            status,
+            body
+        );
         anyhow::bail!("GitHub device code request failed ({status}): {body}");
     }
 
@@ -93,6 +98,11 @@ pub async fn poll_github_token_once(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            "GitHub token poll failed: status={}, body={}",
+            status,
+            body
+        );
         anyhow::bail!("GitHub token poll failed ({status}): {body}");
     }
 
@@ -202,6 +212,11 @@ async fn fetch_copilot_token(client: &Client, github_token: &str) -> Result<Copi
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            "Copilot token request failed: status={}, body={}",
+            status,
+            body
+        );
         anyhow::bail!("Copilot token request failed ({status}): {body}");
     }
 
