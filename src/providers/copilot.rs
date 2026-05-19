@@ -99,6 +99,95 @@ impl CopilotProvider {
         }
     }
 
+    async fn send_message_stream_with_url(
+        &self,
+        request: AnthropicRequest,
+        url: &str,
+        bearer: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
+    {
+        let delegate = Self::make_delegate();
+        let openai_request = delegate.transform_request(&request)?;
+
+        let mut json_body =
+            serde_json::to_value(&openai_request).map_err(|e| ProviderError::ApiError {
+                status: 500,
+                message: e.to_string(),
+            })?;
+        if request.model == "auto" {
+            if let serde_json::Value::Object(ref mut map) = json_body {
+                map.remove("model");
+            }
+        }
+
+        let mut req_builder = self
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", bearer))
+            .header("Content-Type", "application/json")
+            .header("accept", "text/event-stream");
+
+        for (key, value) in COPILOT_HEADERS {
+            req_builder = req_builder.header(*key, *value);
+        }
+
+        let response = req_builder
+            .json(&json_body)
+            .send()
+            .await
+            .map_err(ProviderError::HttpError)?;
+
+        // On 401, refresh and retry once
+        let response = if response.status() == 401 {
+            tracing::info!("Copilot token rejected (401) in stream, refreshing and retrying");
+            let fresh_bearer = self.get_valid_copilot_token().await?;
+            let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
+            let mut retry_builder = self
+                .client
+                .post(&fresh_url)
+                .header("Authorization", format!("Bearer {}", fresh_bearer))
+                .header("Content-Type", "application/json")
+                .header("accept", "text/event-stream");
+            for (key, value) in COPILOT_HEADERS {
+                retry_builder = retry_builder.header(*key, *value);
+            }
+            retry_builder
+                .json(&json_body)
+                .send()
+                .await
+                .map_err(ProviderError::HttpError)?
+        } else {
+            response
+        };
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            tracing::error!(
+                "Copilot API error (streaming): status={}, body={}",
+                status,
+                &error_text[..error_text.len().min(512)]
+            );
+            return Err(ProviderError::ApiError {
+                status,
+                message: error_text,
+            });
+        }
+
+        let stream = response
+            .bytes_stream()
+            .map_err(ProviderError::HttpError)
+            .inspect_ok(|chunk| {
+                if let Ok(s) = std::str::from_utf8(chunk) {
+                    tracing::debug!("Copilot stream chunk: {}", s);
+                }
+            });
+        Ok(Box::pin(stream))
+    }
+
     fn make_delegate() -> OpenAIProvider {
         OpenAIProvider::new(
             String::new(),
@@ -183,7 +272,7 @@ impl AnthropicProvider for CopilotProvider {
             tracing::error!(
                 "Copilot API error (non-streaming): status={}, body={}",
                 status,
-                error_text
+                &error_text[..error_text.len().min(512)]
             );
             return Err(ProviderError::ApiError {
                 status,
@@ -201,10 +290,10 @@ impl AnthropicProvider for CopilotProvider {
         let openai_response: OpenAIResponse =
             serde_json::from_str(&response_text).map_err(|e| {
                 tracing::error!(
-                    "Copilot response JSON parse error: {}. Response text ({} bytes): {}",
+                    "Copilot response JSON parse error: {}. Response text ({} bytes, first 512): {}",
                     e,
                     response_text.len(),
-                    response_text
+                    &response_text[..response_text.len().min(512)]
                 );
                 ProviderError::ApiError {
                     status: 500,
@@ -223,87 +312,8 @@ impl AnthropicProvider for CopilotProvider {
         let bearer = self.get_valid_copilot_token().await?;
         let base_url = parse_proxy_ep(&bearer);
         let url = format!("{}/chat/completions", base_url);
-
-        let delegate = Self::make_delegate();
-        let openai_request = delegate.transform_request(&request)?;
-
-        let mut json_body =
-            serde_json::to_value(&openai_request).map_err(|e| ProviderError::ApiError {
-                status: 500,
-                message: e.to_string(),
-            })?;
-        if request.model == "auto" {
-            if let serde_json::Value::Object(ref mut map) = json_body {
-                map.remove("model");
-            }
-        }
-
-        let mut req_builder = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", bearer))
-            .header("Content-Type", "application/json")
-            .header("accept", "text/event-stream");
-
-        for (key, value) in COPILOT_HEADERS {
-            req_builder = req_builder.header(*key, *value);
-        }
-
-        let response = req_builder
-            .json(&json_body)
-            .send()
+        self.send_message_stream_with_url(request, &url, &bearer)
             .await
-            .map_err(ProviderError::HttpError)?;
-
-        // On 401, refresh and retry once
-        let response = if response.status() == 401 {
-            tracing::info!("Copilot token rejected (401) in stream, refreshing and retrying");
-            let fresh_bearer = self.get_valid_copilot_token().await?;
-            let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
-            let mut retry_builder = self
-                .client
-                .post(&fresh_url)
-                .header("Authorization", format!("Bearer {}", fresh_bearer))
-                .header("Content-Type", "application/json")
-                .header("accept", "text/event-stream");
-            for (key, value) in COPILOT_HEADERS {
-                retry_builder = retry_builder.header(*key, *value);
-            }
-            retry_builder
-                .json(&json_body)
-                .send()
-                .await
-                .map_err(ProviderError::HttpError)?
-        } else {
-            response
-        };
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            tracing::error!(
-                "Copilot API error (streaming): status={}, body={}",
-                status,
-                error_text
-            );
-            return Err(ProviderError::ApiError {
-                status,
-                message: error_text,
-            });
-        }
-
-        let stream = response
-            .bytes_stream()
-            .map_err(ProviderError::HttpError)
-            .inspect_ok(|chunk| {
-                if let Ok(s) = std::str::from_utf8(chunk) {
-                    tracing::debug!("Copilot stream chunk: {}", s);
-                }
-            });
-        Ok(Box::pin(stream))
     }
 
     async fn count_tokens(

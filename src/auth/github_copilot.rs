@@ -51,8 +51,12 @@ pub enum PollResult {
 
 /// Start GitHub device code flow. Returns response with user_code and verification_uri.
 pub async fn start_device_flow(client: &Client) -> Result<DeviceCodeResponse> {
+    start_device_flow_with_url(client, GITHUB_DEVICE_CODE_URL).await
+}
+
+async fn start_device_flow_with_url(client: &Client, url: &str) -> Result<DeviceCodeResponse> {
     let response = client
-        .post(GITHUB_DEVICE_CODE_URL)
+        .post(url)
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!("client_id={}&scope=read:user", GITHUB_CLIENT_ID))
@@ -65,7 +69,7 @@ pub async fn start_device_flow(client: &Client) -> Result<DeviceCodeResponse> {
         tracing::error!(
             "GitHub device code request failed: status={}, body={}",
             status,
-            body
+            &body[..body.len().min(512)]
         );
         anyhow::bail!("GitHub device code request failed ({status}): {body}");
     }
@@ -82,13 +86,22 @@ pub async fn poll_github_token_once(
     device_code: &str,
     interval: u64,
 ) -> Result<(PollResult, u64)> {
+    poll_github_token_once_with_url(client, GITHUB_ACCESS_TOKEN_URL, device_code, interval).await
+}
+
+async fn poll_github_token_once_with_url(
+    client: &Client,
+    url: &str,
+    device_code: &str,
+    interval: u64,
+) -> Result<(PollResult, u64)> {
     let body = format!(
         "client_id={}&device_code={}&grant_type=urn:ietf:params:oauth:grant-type:device_code",
         GITHUB_CLIENT_ID, device_code
     );
 
     let response = client
-        .post(GITHUB_ACCESS_TOKEN_URL)
+        .post(url)
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
@@ -101,7 +114,7 @@ pub async fn poll_github_token_once(
         tracing::error!(
             "GitHub token poll failed: status={}, body={}",
             status,
-            body
+            &body[..body.len().min(512)]
         );
         anyhow::bail!("GitHub token poll failed ({status}): {body}");
     }
@@ -200,8 +213,16 @@ pub fn parse_proxy_ep(bearer: &str) -> String {
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 async fn fetch_copilot_token(client: &Client, github_token: &str) -> Result<CopilotTokenResponse> {
+    fetch_copilot_token_with_url(client, COPILOT_TOKEN_URL, github_token).await
+}
+
+async fn fetch_copilot_token_with_url(
+    client: &Client,
+    url: &str,
+    github_token: &str,
+) -> Result<CopilotTokenResponse> {
     let response = client
-        .get(COPILOT_TOKEN_URL)
+        .get(url)
         .header("Authorization", format!("Bearer {}", github_token))
         .header("Editor-Version", "vscode/1.107.0")
         .header("Copilot-Integration-Id", "vscode-chat")
@@ -215,7 +236,7 @@ async fn fetch_copilot_token(client: &Client, github_token: &str) -> Result<Copi
         tracing::error!(
             "Copilot token request failed: status={}, body={}",
             status,
-            body
+            &body[..body.len().min(512)]
         );
         anyhow::bail!("Copilot token request failed ({status}): {body}");
     }
