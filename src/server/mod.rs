@@ -1844,6 +1844,52 @@ mod tests {
     }
 
     #[test]
+    fn test_should_use_passthrough_auth_returns_false_for_anthropic_oauth() {
+        let configs = vec![ProviderConfig {
+            name: "ant-oauth".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: crate::providers::AuthType::OAuth,
+            supported_beta_options: vec![],
+            api_key: None,
+            oauth_provider: Some("anthropic".to_string()),
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec![],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        }];
+        assert!(!should_use_passthrough_auth(&configs, "ant-oauth"));
+    }
+
+    #[test]
+    fn test_passthrough_auth_set_per_mapping_not_filtered() {
+        // Verifies the fix: all providers stay in the fallback list and passthrough_auth
+        // is set per-mapping. Under the old code, copilot was filtered out of
+        // sorted_mappings entirely when a passthrough token was present.
+        let configs = make_configs();
+        let token = Some("caller-token".to_string());
+
+        // anthropic+Passthrough: receives the caller's bearer token
+        let ant_pt_auth = if should_use_passthrough_auth(&configs, "ant-pt") {
+            token.clone()
+        } else {
+            None
+        };
+
+        // copilot: stays in the fallback list but gets None (uses its own OAuth)
+        let cop1_auth = if should_use_passthrough_auth(&configs, "cop1") {
+            token.clone()
+        } else {
+            None
+        };
+
+        assert_eq!(ant_pt_auth, token);
+        assert_eq!(cop1_auth, None);
+    }
+
+    #[test]
     fn test_extract_bearer_token_with_valid_token() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
