@@ -187,7 +187,7 @@ impl AnthropicProvider for CopilotProvider {
         }
 
         let response_text = response.text().await.map_err(ProviderError::HttpError)?;
-        tracing::debug!("Copilot provider response: {} bytes", response_text.len());
+        tracing::debug!("Copilot provider response ({} bytes): {}", response_text.len(), response_text);
 
         let openai_response: OpenAIResponse =
             serde_json::from_str(&response_text).map_err(|e| ProviderError::ApiError {
@@ -273,7 +273,14 @@ impl AnthropicProvider for CopilotProvider {
             });
         }
 
-        let stream = response.bytes_stream().map_err(ProviderError::HttpError);
+        let stream = response
+            .bytes_stream()
+            .map_err(ProviderError::HttpError)
+            .inspect_ok(|chunk| {
+                if let Ok(s) = std::str::from_utf8(chunk) {
+                    tracing::debug!("Copilot stream chunk: {}", s);
+                }
+            });
         Ok(Box::pin(stream))
     }
 
