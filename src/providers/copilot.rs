@@ -388,4 +388,42 @@ mod tests {
         assert!(provider.supports_model("claude-sonnet-4-5"));
         assert!(!provider.supports_model("llama-3"));
     }
+
+    #[tokio::test]
+    async fn test_send_message_stream_non_200_returns_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/")
+            .with_status(503)
+            .with_body("Service Unavailable")
+            .create_async()
+            .await;
+
+        let provider = CopilotProvider::new("test".to_string(), vec![], None);
+        let request = AnthropicRequest {
+            model: "gpt-4o".to_string(),
+            messages: vec![],
+            system: None,
+            max_tokens: 10,
+            stream: Some(true),
+            tools: None,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            metadata: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+        let result = provider
+            .send_message_stream_with_url(request, &server.url(), "fake_bearer")
+            .await;
+        assert!(result.is_err());
+        if let Err(ProviderError::ApiError { status, .. }) = result {
+            assert_eq!(status, 503);
+        } else {
+            panic!("expected ApiError");
+        }
+    }
 }

@@ -288,4 +288,56 @@ mod tests {
             "https://api.enterprise.githubcopilot.com"
         );
     }
+
+    #[tokio::test]
+    async fn test_start_device_flow_non_200_returns_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/")
+            .with_status(500)
+            .with_body("Internal Server Error")
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = start_device_flow_with_url(&client, &server.url()).await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("GitHub device code request failed (500)"));
+    }
+
+    #[tokio::test]
+    async fn test_poll_github_token_once_non_200_returns_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/")
+            .with_status(401)
+            .with_body("Unauthorized")
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = poll_github_token_once_with_url(&client, &server.url(), "test_code", 5).await;
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("GitHub token poll failed (401)"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_copilot_token_non_200_returns_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(403)
+            .with_body("Forbidden")
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let result =
+            fetch_copilot_token_with_url(&client, &server.url(), "fake_github_token").await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Copilot token request failed (403)"));
+    }
 }
