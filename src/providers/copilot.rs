@@ -68,11 +68,6 @@ impl CopilotProvider {
             let copilot_resp = refresh_copilot_token(&self.client, &github_token)
                 .await
                 .map_err(|e| {
-                    tracing::warn!(
-                        "Copilot token refresh failed for '{}': {}",
-                        self.name,
-                        e
-                    );
                     ProviderError::AuthError(format!("Failed to refresh Copilot token: {}", e))
                 })?;
 
@@ -92,11 +87,6 @@ impl CopilotProvider {
             };
 
             token_store.save(updated_token).map_err(|e| {
-                tracing::warn!(
-                    "Failed to save refreshed Copilot token for '{}': {}",
-                    self.name,
-                    e
-                );
                 ProviderError::AuthError(format!("Failed to save refreshed token: {}", e))
             })?;
 
