@@ -1047,7 +1047,7 @@ async fn handle_openai_chat_completions(
                         return Ok(Json(openai_response).into_response());
                     }
                     Err(e) => {
-                        info!(
+                        warn!(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
@@ -1056,7 +1056,7 @@ async fn handle_openai_chat_completions(
                     }
                 }
             } else {
-                info!(
+                warn!(
                     "⚠️ Provider {} not found in registry, trying next fallback",
                     mapping.provider
                 );
@@ -1334,7 +1334,7 @@ async fn handle_messages(
                             return Ok(Sse::new(sse_stream).into_response());
                         }
                         Err(e) => {
-                            info!(
+                            warn!(
                                 "⚠️ Provider {} streaming failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
@@ -1355,7 +1355,7 @@ async fn handle_messages(
                             return Ok(Json(response).into_response());
                         }
                         Err(e) => {
-                            info!(
+                            warn!(
                                 "⚠️ Provider {} failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
@@ -1365,7 +1365,7 @@ async fn handle_messages(
                     }
                 }
             } else {
-                info!(
+                warn!(
                     "⚠️ Provider {} not found in registry, trying next fallback",
                     mapping.provider
                 );
@@ -1566,7 +1566,7 @@ async fn handle_count_tokens(
                         return Ok(Json(response).into_response());
                     }
                     Err(e) => {
-                        info!(
+                        warn!(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
@@ -1574,7 +1574,7 @@ async fn handle_count_tokens(
                     }
                 }
             } else {
-                info!(
+                warn!(
                     "⚠️ Provider {} not found in registry, trying next fallback",
                     mapping.provider
                 );
