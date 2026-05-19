@@ -730,15 +730,20 @@ start "" "{}" start --port {}
     Ok(())
 }
 
-/// Returns true if the named provider is eligible for passthrough routing.
-fn is_anthropic_compatible_provider(
+/// Returns true if the named provider should receive passthrough auth.
+/// Only anthropic-type providers with auth_type=passthrough are eligible.
+/// Other providers (copilot, nvidia-nim, apikey/oauth anthropic) use their own auth.
+fn should_use_passthrough_auth(
     providers: &[crate::providers::ProviderConfig],
     name: &str,
 ) -> bool {
     providers
         .iter()
         .find(|p| p.name == name)
-        .map(|p| matches!(p.provider_type.as_str(), "anthropic" | "nvidia-nim"))
+        .map(|p| {
+            p.provider_type == "anthropic"
+                && matches!(p.auth_type, crate::providers::AuthType::Passthrough)
+        })
         .unwrap_or(false)
 }
 
@@ -887,7 +892,7 @@ async fn handle_openai_chat_completions(
     let mut anthropic_request = openai_compat::transform_openai_to_anthropic(openai_request)
         .map_err(|e| AppError::ParseError(format!("Failed to transform OpenAI request: {}", e)))?;
 
-    anthropic_request.passthrough_auth = passthrough_token.clone();
+    anthropic_request.passthrough_auth = None; // Set per-mapping in the fallback loop
     anthropic_request.anthropic_beta_header = headers
         .get("anthropic-beta")
         .and_then(|v| v.to_str().ok())
@@ -977,6 +982,14 @@ async fn handle_openai_chat_completions(
             if let Some(provider) = state.provider_registry.get_provider(&mapping.provider) {
                 // Update model to actual model name
                 anthropic_request.model = mapping.actual_model.clone();
+
+                // Set passthrough auth per-mapping: only passthrough-type anthropic providers
+                // should receive the caller's bearer token; others use their own auth
+                anthropic_request.passthrough_auth = if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
+                    passthrough_token.clone()
+                } else {
+                    None
+                };
 
                 // Restore original beta header before applying mapping-specific stripping
                 anthropic_request.anthropic_beta_header = original_beta_header.clone();
@@ -1202,22 +1215,10 @@ async fn handle_messages(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
-        // In passthrough mode, restrict to anthropic-type providers only; fall back
-        // gracefully if none are available (e.g. only OAuth providers configured).
-        let mut effective_passthrough = passthrough_token.clone();
-        if passthrough_token.is_some() {
-            let pt_capable: Vec<_> = sorted_mappings
-                .iter()
-                .filter(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider))
-                .cloned()
-                .collect();
-            if pt_capable.is_empty() {
-                warn!("🔑 No passthrough-capable providers available — continuing without passthrough bearer");
-                effective_passthrough = None;
-            } else {
-                sorted_mappings = pt_capable;
-            }
-        }
+        // In passthrough mode, each mapping decides whether to use passthrough auth:
+        // - anthropic + auth_type=passthrough → use passthrough bearer
+        // - all others (apikey, oauth, copilot, nvidia-nim) → ignore passthrough, use own auth
+        // All mappings stay in the fallback list regardless.
 
         // Try each mapping in priority order (or just the forced one)
         let mut fallback_failures = Vec::new();
@@ -1249,7 +1250,11 @@ async fn handle_messages(
                 // Propagate passthrough auth and beta header before stripping, so the
                 // strip logic can see the actual header value (anthropic_beta_header is
                 // #[serde(skip)] and therefore always None after JSON deserialization)
-                anthropic_request.passthrough_auth = effective_passthrough.clone();
+                anthropic_request.passthrough_auth = if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
+                passthrough_token.clone()
+            } else {
+                None
+            };
                 anthropic_request.anthropic_beta_header = incoming_beta_header.clone();
 
                 // Strip beta options if configured in the mapping
@@ -1502,19 +1507,6 @@ async fn handle_count_tokens(
         let mut sorted_mappings = model_config.mappings.clone();
         sorted_mappings.sort_by_key(|m| m.priority);
 
-        if passthrough_token.is_some() {
-            let pt_capable: Vec<_> = sorted_mappings
-                .iter()
-                .filter(|m| is_anthropic_compatible_provider(&state.config.providers, &m.provider))
-                .cloned()
-                .collect();
-            if pt_capable.is_empty() {
-                warn!("🔑 No passthrough-capable providers available — continuing without passthrough bearer");
-                routing_request.passthrough_auth = None;
-            } else {
-                sorted_mappings = pt_capable;
-            }
-        }
 
         // Try each mapping in priority order
         for (idx, mapping) in sorted_mappings.iter().enumerate() {
@@ -1533,7 +1525,11 @@ async fn handle_count_tokens(
                 // Update model to actual model name and include passthrough auth if present
                 let mut count_request_for_provider = count_request.clone();
                 count_request_for_provider.model = mapping.actual_model.clone();
-                count_request_for_provider.passthrough_auth = passthrough_token.clone();
+                count_request_for_provider.passthrough_auth = if should_use_passthrough_auth(&state.config.providers, &mapping.provider) {
+                    passthrough_token.clone()
+                } else {
+                    None
+                };
 
                 // Call provider's count_tokens
                 match provider.count_tokens(count_request_for_provider).await {
@@ -1581,10 +1577,24 @@ async fn handle_count_tokens(
                 decision.model_name
             );
 
-            // Update model to routed model and include passthrough auth if present
-            let mut count_request_for_provider = count_request.clone();
-            count_request_for_provider.model = decision.model_name.clone();
-            count_request_for_provider.passthrough_auth = passthrough_token.clone();
+        // Update model to routed model and include passthrough auth if eligible
+        let mut count_request_for_provider = count_request.clone();
+        count_request_for_provider.model = decision.model_name.clone();
+        // Look up the provider name from [[models]] config to decide passthrough eligibility
+        let provider_name = state.config.models
+            .iter()
+            .find(|m| m.name == decision.model_name)
+            .and_then(|m| m.mappings.first())
+            .map(|m| m.provider.clone());
+        count_request_for_provider.passthrough_auth = if let Some(ref pname) = provider_name {
+            if should_use_passthrough_auth(&state.config.providers, pname) {
+                passthrough_token.clone()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
             // Call provider's count_tokens
             let response = provider
@@ -1764,93 +1774,73 @@ mod tests {
                 rate_limit_rpm: None,
                 rate_limit_max_wait_ms: None,
             },
+        ProviderConfig {
+            name: "ant-pt".to_string(),
+            provider_type: "anthropic".to_string(),
+            auth_type: crate::providers::AuthType::Passthrough,
+            supported_beta_options: vec![],
+            api_key: None,
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec![],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        },
+        ProviderConfig {
+            name: "cop1".to_string(),
+            provider_type: "copilot".to_string(),
+            auth_type: crate::providers::AuthType::OAuth,
+            supported_beta_options: vec![],
+            api_key: None,
+            oauth_provider: Some("copilot".to_string()),
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec![],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        },
         ]
     }
 
     #[test]
-    fn test_is_anthropic_compatible_provider_returns_true_for_anthropic_type() {
+    fn test_should_use_passthrough_auth_returns_true_for_anthropic_passthrough() {
         let configs = make_configs();
-        assert!(is_anthropic_compatible_provider(&configs, "ant1"));
+        assert!(should_use_passthrough_auth(&configs, "ant-pt"));
     }
 
     #[test]
-    fn test_is_anthropic_compatible_provider_returns_true_for_nvidia_nim_type() {
+    fn test_should_use_passthrough_auth_returns_false_for_anthropic_apikey() {
         let configs = make_configs();
-        assert!(is_anthropic_compatible_provider(&configs, "nim1"));
+        assert!(!should_use_passthrough_auth(&configs, "ant1"));
     }
 
     #[test]
-    fn test_is_anthropic_compatible_provider_returns_false_for_openai_type() {
+    fn test_should_use_passthrough_auth_returns_false_for_nvidia_nim() {
         let configs = make_configs();
-        assert!(!is_anthropic_compatible_provider(&configs, "oai1"));
+        assert!(!should_use_passthrough_auth(&configs, "nim1"));
     }
 
     #[test]
-    fn test_is_anthropic_compatible_provider_returns_false_for_unknown_name() {
+    fn test_should_use_passthrough_auth_returns_false_for_copilot() {
         let configs = make_configs();
-        assert!(!is_anthropic_compatible_provider(&configs, "unknown"));
+        assert!(!should_use_passthrough_auth(&configs, "cop1"));
     }
 
     #[test]
-    fn test_passthrough_filter_includes_anthropic_compatible_mappings() {
-        use crate::cli::ModelMapping;
-
-        let configs = make_configs(); // ant1=anthropic, nim1=nvidia-nim, oai1=openai
-
-        let mappings = vec![
-            ModelMapping {
-                provider: "ant1".to_string(),
-                actual_model: "claude-opus-4-5".to_string(),
-                priority: 1,
-                strip_beta_options: false,
-                strip_specific_beta: vec![],
-            },
-            ModelMapping {
-                provider: "nim1".to_string(),
-                actual_model: "meta-llama-3.1-405b-instruct".to_string(),
-                priority: 2,
-                strip_beta_options: false,
-                strip_specific_beta: vec![],
-            },
-            ModelMapping {
-                provider: "oai1".to_string(),
-                actual_model: "gpt-4o".to_string(),
-                priority: 3,
-                strip_beta_options: false,
-                strip_specific_beta: vec![],
-            },
-        ];
-
-        let filtered: Vec<_> = mappings
-            .into_iter()
-            .filter(|m| is_anthropic_compatible_provider(&configs, &m.provider))
-            .collect();
-
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].provider, "ant1");
-        assert_eq!(filtered[1].provider, "nim1");
+    fn test_should_use_passthrough_auth_returns_false_for_openai() {
+        let configs = make_configs();
+        assert!(!should_use_passthrough_auth(&configs, "oai1"));
     }
 
     #[test]
-    fn test_passthrough_filter_empty_when_no_compatible_mappings() {
-        use crate::cli::ModelMapping;
-
-        let configs = make_configs(); // ant1=anthropic, oai1=openai
-
-        let mappings = vec![ModelMapping {
-            provider: "oai1".to_string(),
-            actual_model: "gpt-4o".to_string(),
-            priority: 1,
-            strip_beta_options: false,
-            strip_specific_beta: vec![],
-        }];
-
-        let filtered: Vec<_> = mappings
-            .into_iter()
-            .filter(|m| is_anthropic_compatible_provider(&configs, &m.provider))
-            .collect();
-
-        assert!(filtered.is_empty());
+    fn test_should_use_passthrough_auth_returns_false_for_unknown() {
+        let configs = make_configs();
+        assert!(!should_use_passthrough_auth(&configs, "unknown"));
     }
 
     #[test]
