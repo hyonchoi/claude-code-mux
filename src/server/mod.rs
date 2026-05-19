@@ -27,12 +27,12 @@ use tracing::{debug, error, info, trace, warn};
 // Threshold must exceed the poll interval so a freshly-refreshed 30-min token is
 // caught at the next poll instead of expiring silently between checks.
 const COPILOT_POLL_SECS: u64 = 20 * 60;
-const COPILOT_REFRESH_THRESHOLD_SECS: i64 = COPILOT_POLL_SECS as i64 + 5 * 60; // 25 min
 
 /// Returns true when the token will expire before the next background refresh poll.
-fn copilot_token_needs_background_refresh(token: &crate::auth::OAuthToken) -> bool {
+fn needs_background_refresh(token: &crate::auth::OAuthToken, poll_secs: u64) -> bool {
+    let threshold = chrono::Duration::seconds(poll_secs as i64 + 5 * 60);
     let remaining = token.expires_at.signed_duration_since(chrono::Utc::now());
-    remaining < chrono::Duration::seconds(COPILOT_REFRESH_THRESHOLD_SECS)
+    remaining < threshold
 }
 
 /// Builds a refreshed OAuthToken from a Copilot response, preserving all
@@ -172,6 +172,79 @@ fn strip_beta_options_from_request(
     }
 }
 
+async fn refresh_provider_if_needed(
+    provider_config: &crate::providers::ProviderConfig,
+    token_store: &crate::auth::TokenStore,
+    client: &reqwest::Client,
+) {
+    if provider_config.auth_type != crate::providers::AuthType::OAuth {
+        return;
+    }
+    let provider_id = provider_config
+        .oauth_provider
+        .clone()
+        .unwrap_or_else(|| provider_config.name.clone());
+    let token = match token_store.get(&provider_id) {
+        Some(t) => t,
+        None => return,
+    };
+    if !needs_background_refresh(&token, COPILOT_POLL_SECS) {
+        return;
+    }
+    match provider_config.provider_type.as_str() {
+        "copilot" => {
+            match crate::auth::github_copilot::refresh_copilot_token(client, &token.refresh_token)
+                .await
+            {
+                Ok(resp) => {
+                    let updated =
+                        build_refreshed_copilot_token(&token, resp.token, resp.expires_at);
+                    if let Err(e) = token_store.save(updated) {
+                        warn!(
+                            "Background refresh: failed to save Copilot token for '{}': {}",
+                            provider_id, e
+                        );
+                    } else {
+                        info!(
+                            "Background refresh: renewed Copilot bearer for '{}'",
+                            provider_id
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Background refresh: failed to renew Copilot bearer for '{}': {}",
+                        provider_id, e
+                    );
+                }
+            }
+        }
+        "gemini" | "openai" | "anthropic" => {
+            let oauth_config = match provider_config.provider_type.as_str() {
+                "gemini" => crate::auth::OAuthConfig::gemini(),
+                "openai" => crate::auth::OAuthConfig::openai_codex(),
+                _ => crate::auth::OAuthConfig::anthropic(),
+            };
+            let oauth_client = crate::auth::OAuthClient::new(oauth_config, token_store.clone());
+            match oauth_client.refresh_token(&provider_id).await {
+                Ok(_) => {
+                    info!(
+                        "Background refresh: renewed {} OAuth token for '{}'",
+                        provider_config.provider_type, provider_id
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Background refresh: failed to renew {} OAuth token for '{}': {}",
+                        provider_config.provider_type, provider_id, e
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Start the HTTP server
 pub async fn start_server(
     config: AppConfig,
@@ -212,9 +285,9 @@ pub async fn start_server(
         provider_cooldowns: Arc::new(dashmap::DashMap::new()),
     });
 
-    // Background task: proactively refresh Copilot OAuth bearer tokens every 20 minutes.
-    // Copilot bearers have a ~30-minute TTL. Without this, idle providers (not in the
-    // active fallback chain) never get refreshed and require full re-OAuth when re-enabled.
+    // Background task: proactively refresh OAuth bearer tokens every 20 minutes.
+    // Covers Copilot (~30-min TTL), Gemini, OpenAI, and Anthropic OAuth providers.
+    // Without this, idle providers never get refreshed and require full re-OAuth when re-enabled.
     {
         let bg_token_store = state.token_store.clone();
         let bg_providers = state.config.providers.clone();
@@ -226,34 +299,8 @@ pub async fn start_server(
             loop {
                 interval.tick().await;
                 for provider_config in &bg_providers {
-                    if provider_config.provider_type == "copilot" {
-                        if let Some(token) = bg_token_store.get(&provider_config.name) {
-                            if copilot_token_needs_background_refresh(&token) {
-                                match crate::auth::github_copilot::refresh_copilot_token(
-                                    &bg_client,
-                                    &token.refresh_token,
-                                )
-                                .await
-                                {
-                                    Ok(resp) => {
-                                        let updated = build_refreshed_copilot_token(
-                                            &token,
-                                            resp.token,
-                                            resp.expires_at,
-                                        );
-                                        if let Err(e) = bg_token_store.save(updated) {
-                                            warn!("Background refresh: failed to save Copilot token for '{}': {}", provider_config.name, e);
-                                        } else {
-                                            info!("Background refresh: renewed Copilot bearer for '{}'", provider_config.name);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("Background refresh: failed to renew Copilot bearer for '{}': {}", provider_config.name, e);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    refresh_provider_if_needed(provider_config, &bg_token_store, &bg_client)
+                        .await;
                 }
             }
         });
@@ -2273,7 +2320,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(copilot_token_needs_background_refresh(&token));
+        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
     }
 
     #[test]
@@ -2287,7 +2334,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(!copilot_token_needs_background_refresh(&token));
+        assert!(!needs_background_refresh(&token, COPILOT_POLL_SECS));
     }
 
     #[test]
@@ -2301,7 +2348,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(copilot_token_needs_background_refresh(&token));
+        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
     }
 
     #[test]
@@ -2351,5 +2398,44 @@ mod tests {
             std::time::Instant::now() + std::time::Duration::from_secs(60),
         );
         assert!(is_on_cooldown(&cooldowns, "my-provider"));
+    }
+
+    #[test]
+    fn test_needs_background_refresh_returns_true_when_near_expiry() {
+        let token = crate::auth::OAuthToken {
+            provider_id: "test".into(),
+            access_token: "tok".into(),
+            refresh_token: "ref".into(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+            enterprise_url: None,
+            project_id: None,
+        };
+        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
+    }
+
+    #[test]
+    fn test_needs_background_refresh_returns_false_for_fresh_token() {
+        let token = crate::auth::OAuthToken {
+            provider_id: "test".into(),
+            access_token: "tok".into(),
+            refresh_token: "ref".into(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(2),
+            enterprise_url: None,
+            project_id: None,
+        };
+        assert!(!needs_background_refresh(&token, COPILOT_POLL_SECS));
+    }
+
+    #[test]
+    fn test_needs_background_refresh_returns_true_for_expired_token() {
+        let token = crate::auth::OAuthToken {
+            provider_id: "test".into(),
+            access_token: "tok".into(),
+            refresh_token: "ref".into(),
+            expires_at: chrono::Utc::now() - chrono::Duration::minutes(5),
+            enterprise_url: None,
+            project_id: None,
+        };
+        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
     }
 }
