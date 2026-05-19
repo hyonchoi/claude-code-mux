@@ -55,6 +55,31 @@ fn build_refreshed_copilot_token(
     }
 }
 
+/// Returns the cooldown duration when a provider returns a triggering 4xx error.
+/// 401/403 → 60 seconds, 429 → 30 seconds, all others → None (no deactivation).
+fn cooldown_for_4xx(
+    e: &crate::providers::error::ProviderError,
+) -> Option<std::time::Duration> {
+    if let crate::providers::error::ProviderError::ApiError { status, .. } = e {
+        match *status {
+            401 | 403 => Some(std::time::Duration::from_secs(60)),
+            429 => Some(std::time::Duration::from_secs(30)),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+fn is_on_cooldown(
+    cooldowns: &dashmap::DashMap<String, std::time::Instant>,
+    provider: &str,
+) -> bool {
+    cooldowns
+        .get(provider)
+        .map_or(false, |until| std::time::Instant::now() < *until)
+}
+
 /// Constant-time byte comparison to prevent timing side-channel attacks on API keys.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -2214,5 +2239,54 @@ mod tests {
             project_id: None,
         };
         assert!(copilot_token_needs_background_refresh(&token));
+    }
+
+    #[test]
+    fn test_cooldown_for_4xx_returns_60s_for_401() {
+        let e = crate::providers::error::ProviderError::ApiError {
+            status: 401,
+            message: "Unauthorized".into(),
+        };
+        assert_eq!(cooldown_for_4xx(&e), Some(std::time::Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_cooldown_for_4xx_returns_30s_for_429() {
+        let e = crate::providers::error::ProviderError::ApiError {
+            status: 429,
+            message: "Too Many Requests".into(),
+        };
+        assert_eq!(cooldown_for_4xx(&e), Some(std::time::Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_cooldown_for_4xx_returns_none_for_500() {
+        let e = crate::providers::error::ProviderError::ApiError {
+            status: 500,
+            message: "Internal Server Error".into(),
+        };
+        assert_eq!(cooldown_for_4xx(&e), None);
+    }
+
+    #[test]
+    fn test_cooldown_for_4xx_returns_none_for_non_api_error() {
+        let e = crate::providers::error::ProviderError::AuthError("token missing".into());
+        assert_eq!(cooldown_for_4xx(&e), None);
+    }
+
+    #[test]
+    fn test_is_on_cooldown_false_when_map_is_empty() {
+        let cooldowns: dashmap::DashMap<String, std::time::Instant> = dashmap::DashMap::new();
+        assert!(!is_on_cooldown(&cooldowns, "my-provider"));
+    }
+
+    #[test]
+    fn test_is_on_cooldown_true_when_cooldown_is_active() {
+        let cooldowns: dashmap::DashMap<String, std::time::Instant> = dashmap::DashMap::new();
+        cooldowns.insert(
+            "my-provider".to_string(),
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+        );
+        assert!(is_on_cooldown(&cooldowns, "my-provider"));
     }
 }
