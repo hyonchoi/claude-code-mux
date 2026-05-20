@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Copilot network retry [attempt=1]` — confirms single-retry path fired
   - `Copilot 401: force-refreshing token [session_id=...]` — confirms force-invalidate fired
 
+### Changed
+- **Provider cooldown durations** — 401/403 cooldown raised from 60 s to 240 s; 429 cooldown raised from 30 s to 120 s. Providers that hit auth failures or rate limits now stay out of rotation longer, reducing hammering on struggling endpoints.
+- **Copilot model passthrough** — removed `auto` model special-casing. Previously, sending `model: "auto"` to the Copilot endpoint stripped the model field from the upstream request. The model field is now forwarded as-is for all values.
+
 ## [0.8.2-chy] - 2026-05-19
 
 ### Added
