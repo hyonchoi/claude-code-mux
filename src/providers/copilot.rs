@@ -601,6 +601,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_all_8_headers_present_and_ids_stable_on_success() {
+        let client = reqwest::Client::new();
+        let provider = CopilotProvider::new_with_client("test".to_string(), vec![], None, client);
+
+        // Construct two requests manually and inspect headers.
+        let c = reqwest::Client::new();
+        let b1 = apply_copilot_headers(
+            c.post("http://localhost"),
+            &provider.session_id,
+            &provider.machine_id,
+        )
+        .build()
+        .unwrap();
+        let b2 = apply_copilot_headers(
+            c.post("http://localhost"),
+            &provider.session_id,
+            &provider.machine_id,
+        )
+        .build()
+        .unwrap();
+
+        let headers1 = b1.headers();
+        let headers2 = b2.headers();
+
+        // All 8 static headers present with correct values
+        for (key, expected_val) in COPILOT_HEADERS {
+            assert!(headers1.contains_key(*key), "Missing header: {}", key);
+            assert_eq!(
+                headers1.get(*key).unwrap().to_str().unwrap(),
+                *expected_val,
+                "Wrong value for {}",
+                key
+            );
+        }
+
+        // VScode-SessionId is stable across calls
+        let sid1 = headers1.get("VScode-SessionId").unwrap().to_str().unwrap().to_string();
+        let sid2 = headers2.get("VScode-SessionId").unwrap().to_str().unwrap().to_string();
+        assert_eq!(sid1, sid2, "VScode-SessionId must be stable");
+        assert_eq!(sid1, provider.session_id);
+
+        // VScode-MachineId is stable across calls
+        let mid1 = headers1.get("VScode-MachineId").unwrap().to_str().unwrap().to_string();
+        let mid2 = headers2.get("VScode-MachineId").unwrap().to_str().unwrap().to_string();
+        assert_eq!(mid1, mid2, "VScode-MachineId must be stable");
+
+        // X-Request-Id is unique per call
+        let rid1 = headers1.get("X-Request-Id").unwrap().to_str().unwrap().to_string();
+        let rid2 = headers2.get("X-Request-Id").unwrap().to_str().unwrap().to_string();
+        assert_ne!(rid1, rid2, "X-Request-Id must differ on each call");
+        assert_eq!(rid1.len(), 36);
+    }
+
+    #[tokio::test]
     async fn test_send_message_stream_non_200_returns_error() {
         let mut server = mockito::Server::new_async().await;
         let _mock = server
