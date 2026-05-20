@@ -159,16 +159,15 @@ impl CopilotProvider {
             }
         }
 
-        let mut req_builder = self
-            .client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", bearer))
-            .header("Content-Type", "application/json")
-            .header("accept", "text/event-stream");
-
-        for (key, value) in COPILOT_HEADERS {
-            req_builder = req_builder.header(*key, *value);
-        }
+        let req_builder = apply_copilot_headers(
+            self.client
+                .post(url)
+                .header("Authorization", format!("Bearer {}", bearer))
+                .header("Content-Type", "application/json")
+                .header("accept", "text/event-stream"),
+            &self.session_id,
+            &self.machine_id,
+        );
 
         let response = req_builder
             .json(&json_body)
@@ -181,15 +180,15 @@ impl CopilotProvider {
             tracing::info!("Copilot token rejected (401) in stream, refreshing and retrying");
             let fresh_bearer = self.get_valid_copilot_token().await?;
             let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
-            let mut retry_builder = self
-                .client
-                .post(&fresh_url)
-                .header("Authorization", format!("Bearer {}", fresh_bearer))
-                .header("Content-Type", "application/json")
-                .header("accept", "text/event-stream");
-            for (key, value) in COPILOT_HEADERS {
-                retry_builder = retry_builder.header(*key, *value);
-            }
+            let retry_builder = apply_copilot_headers(
+                self.client
+                    .post(&fresh_url)
+                    .header("Authorization", format!("Bearer {}", fresh_bearer))
+                    .header("Content-Type", "application/json")
+                    .header("accept", "text/event-stream"),
+                &self.session_id,
+                &self.machine_id,
+            );
             retry_builder
                 .json(&json_body)
                 .send()
@@ -263,15 +262,14 @@ impl AnthropicProvider for CopilotProvider {
             }
         }
 
-        let mut req_builder = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", bearer))
-            .header("Content-Type", "application/json");
-
-        for (key, value) in COPILOT_HEADERS {
-            req_builder = req_builder.header(*key, *value);
-        }
+        let req_builder = apply_copilot_headers(
+            self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", bearer))
+                .header("Content-Type", "application/json"),
+            &self.session_id,
+            &self.machine_id,
+        );
 
         let response = req_builder
             .json(&json_body)
@@ -285,14 +283,14 @@ impl AnthropicProvider for CopilotProvider {
             tracing::info!("Copilot token rejected (401), refreshing and retrying");
             let fresh_bearer = self.get_valid_copilot_token().await?;
             let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
-            let mut retry_builder = self
-                .client
-                .post(&fresh_url)
-                .header("Authorization", format!("Bearer {}", fresh_bearer))
-                .header("Content-Type", "application/json");
-            for (key, value) in COPILOT_HEADERS {
-                retry_builder = retry_builder.header(*key, *value);
-            }
+            let retry_builder = apply_copilot_headers(
+                self.client
+                    .post(&fresh_url)
+                    .header("Authorization", format!("Bearer {}", fresh_bearer))
+                    .header("Content-Type", "application/json"),
+                &self.session_id,
+                &self.machine_id,
+            );
             retry_builder
                 .json(&json_body)
                 .send()
