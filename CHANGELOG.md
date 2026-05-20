@@ -5,6 +5,19 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3-chy] - 2026-05-20
+
+### Fixed
+- **Copilot 400 cascade** — after 3–6 turns, the Copilot API was returning `400 Bad Request` with no body because the proxy was sending requests without the VSCode session tracking headers the API requires. Fixed by adding `VScode-SessionId` and `VScode-MachineId` (stable UUIDs per proxy session), `X-Request-Id` (fresh UUID per request), `Openai-Organization`, `X-GitHub-Api-Version`, and `X-Interaction-Type`. Upgrade to this version to stop mid-session 400 errors.
+- **Copilot 401 retry race** — if a Copilot token was between the 5-minute refresh gate and actual expiry, a 401 retry would re-check `needs_refresh()`, find the token still valid, and return the same stale token — failing again silently. Fixed by force-invalidating the cached token on any 401 response.
+
+### Added
+- **Copilot network retry** — single quiet retry on connect-level errors (timeout, connection reset, DNS failure). The retry regenerates a fresh `X-Request-Id`. Mid-stream failures are not retried (once SSE headers are accepted, the connection is committed).
+- Structured `tracing` log lines for all three recovery paths — check logs with `RUST_LOG=ccm=info cargo run`:
+  - `Copilot session established [session_id=..., machine_id=...]` — confirms fix is active on startup
+  - `Copilot network retry [attempt=1]` — confirms single-retry path fired
+  - `Copilot 401: force-refreshing token [session_id=...]` — confirms force-invalidate fired
+
 ## [0.8.2-chy] - 2026-05-19
 
 ### Added
