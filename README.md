@@ -982,6 +982,31 @@ ccm --help
 - ✅ **Provider failover** with priority-based routing
 - ✅ Auto-strip incompatible parameters for OpenAI models
 
+## Upgrading
+
+### Cargo users
+
+```bash
+cargo install --force claude-code-mux
+```
+
+### Binary users
+
+Re-download the latest binary from the [releases page](https://github.com/9j/claude-code-mux/releases/latest) and replace your existing binary.
+
+### After upgrading
+
+Your config file is preserved across upgrades — no migration needed. Restart ccm to pick up the new binary:
+
+```bash
+ccm restart
+```
+
+To verify the version:
+```bash
+ccm --version
+```
+
 ## Troubleshooting
 
 ### Check if server is running
