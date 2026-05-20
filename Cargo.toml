@@ -67,6 +67,7 @@ oauth2 = "4"               # OAuth 2.0 client
 base64 = "0.22"            # Base64 encoding
 sha2 = "0.10"              # SHA-256 for PKCE
 rand = "0.8"               # Random generation for PKCE
+uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }  # Timestamps
 url = "2"                  # URL parsing
 
