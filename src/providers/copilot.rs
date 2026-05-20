@@ -180,13 +180,10 @@ impl CopilotProvider {
                         "Copilot network retry"
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let retry_builder = apply_copilot_headers(
-                        retry_builder.header("Authorization", format!("Bearer {}", bearer))
-                            .header("Content-Type", "application/json")
-                            .header("accept", "text/event-stream"),
-                        &self.session_id,
-                        &self.machine_id,
-                    );
+                    // Clone already has all headers from the original builder.
+                    // Only regenerate X-Request-Id to avoid duplicate headers.
+                    let retry_builder = retry_builder
+                        .header("X-Request-Id", Uuid::new_v4().to_string());
                     retry_builder.send().await.map_err(ProviderError::HttpError)?
                 } else {
                     return Err(ProviderError::HttpError(e));
@@ -306,12 +303,10 @@ impl AnthropicProvider for CopilotProvider {
                         "Copilot network retry"
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let retry_builder = apply_copilot_headers(
-                        retry_builder.header("Authorization", format!("Bearer {}", bearer))
-                            .header("Content-Type", "application/json"),
-                        &self.session_id,
-                        &self.machine_id,
-                    );
+                    // Clone already has all headers from the original builder.
+                    // Only regenerate X-Request-Id to avoid duplicate headers.
+                    let retry_builder = retry_builder
+                        .header("X-Request-Id", Uuid::new_v4().to_string());
                     retry_builder.send().await.map_err(ProviderError::HttpError)?
                 } else {
                     return Err(ProviderError::HttpError(e));
