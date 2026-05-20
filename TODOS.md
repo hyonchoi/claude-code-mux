@@ -5,6 +5,8 @@
 - Health-aware tie-breaking for fallback candidate selection (D14 from plan-eng-review)
 - Standardize provider_type constants (D15 from plan-eng-review)
 - Circuit breaker / exponential backoff for repeated OAuth refresh failures (open question from OAuth refresh design doc)
+- X-Interaction-Id per-conversation UUID for Copilot provider (D8 from plan-eng-review)
+- Persist VScode-SessionId/MachineId across proxy restarts (D9 from plan-eng-review outside-voice)
 
 
 ## [P1] Rollback Control Contract For Passthrough Relay

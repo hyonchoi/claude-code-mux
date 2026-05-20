@@ -712,7 +712,7 @@ Navigate to **Settings** tab → **OAuth Tokens** section to:
 
 **Token Features**:
 - 🔐 Secure PKCE-based OAuth 2.0 flow
-- 🔄 Automatic token refresh (5 min before expiry)
+- 🔄 Automatic background refresh for all OAuth providers (Anthropic, Gemini, OpenAI-compatible)
 - 💾 Persistent storage with file permissions (0600)
 - 🎨 Visual status indicators (green/yellow/red)
 
@@ -813,6 +813,8 @@ provider = "openrouter"
 ```
 
 If z.ai fails, automatically falls back to OpenRouter. Works with all providers!
+
+**Provider Cooldowns**: When a provider returns a 4xx error, it's temporarily skipped — 60 seconds for auth failures (401/403), 30 seconds for rate limits (429). This prevents wasted retries against a rate-limited provider and makes the fallback path faster.
 
 ### Bearer Token Passthrough
 
@@ -1145,6 +1147,7 @@ If `zai` fails → automatically falls back to `openrouter`. **No manual interve
 - [Design Principles](docs/design-principles.md) - Claude Code Mux design philosophy and UX guidelines
 - [URL-based State Management](docs/url-state-management.md) - Admin UI URL-based state management pattern
 - [LocalStorage-based State Management](docs/localstorage-state-management.md) - Admin UI localStorage-based client state management
+- [Operational Contracts](docs/contracts/) - Rollback, SLO, fallback selection, auth validation, and operational specs
 
 ## Changelog
 

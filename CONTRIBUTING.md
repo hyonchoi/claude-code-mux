@@ -73,6 +73,7 @@ claude-code-mux/
 │   ├── server/              # HTTP server and admin UI
 │   ├── router/              # Routing logic
 │   ├── providers/           # Provider implementations
+│   ├── auth/                # API key and OAuth credential management
 │   └── models/              # Data models
 ├── config/                  # Configuration templates
 ├── docs/                    # Documentation

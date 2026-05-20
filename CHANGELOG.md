@@ -5,6 +5,21 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2-chy] - 2026-05-19
+
+### Added
+- **Provider cooldowns** — when a provider returns 401/403, it's skipped for 60 seconds; 429 skips it for 30 seconds. You get faster fallback to the next provider instead of hammering a rate-limited or auth-failed endpoint
+- **Generalized background OAuth refresh** — background token refresh now covers all OAuth providers (Anthropic, Gemini, OpenAI-compatible), not just Copilot. Idle OAuth tokens no longer expire silently when a provider isn't in the active request path
+- **Operational contracts** — seven spec documents in `docs/contracts/`: rollback contract, SLO, escalation SLA, fallback selection policy, benchmark protocol, auth validation spec, and streaming fallback boundary
+
+### Fixed
+- `escapeJs()` replaces `escapeHtml()` in OAuth token onclick handlers — prevents JS string injection if a provider ID contains quotes or backslashes
+- `loadConfig()` now checks `response.ok` before calling `response.json()` — shows a toast warning instead of crashing when the server requires an API key
+
+### For contributors
+- Renamed `COPILOT_POLL_SECS` → `OAUTH_POLL_SECS` to reflect that the poll interval now governs all OAuth providers
+- TODOS.md: 8 outstanding items resolved, 3 new follow-up items added
+
 ## [0.8.1-chy] - 2026-05-15
 
 ### Added
