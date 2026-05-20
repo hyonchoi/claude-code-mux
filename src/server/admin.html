@@ -2238,11 +2238,11 @@ async function apiFetch(url, options = {}) {
             async function loadConfig() {
                 try {
                     const response = await apiFetch("/api/config/json");
-                if (!response.ok) {
-                    console.warn("loadConfig: server returned", response.status, "— API key may be required or was cancelled");
-                    notifyWarning("API key required to load configuration");
-                    return null;
-                }
+                    if (!response.ok) {
+                        console.warn("loadConfig: server returned", response.status, "— API key may be required or was cancelled");
+                        notifyWarning("API key required to load configuration");
+                        return null;
+                    }
                     const config = await response.json();
                     appState.config = config;
                     appState.loaded = true;
