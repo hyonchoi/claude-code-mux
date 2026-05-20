@@ -240,3 +240,50 @@ After successful authentication:
 | `/api/oauth/tokens` | GET | List all tokens |
 | `/api/oauth/tokens/refresh` | POST | Refresh a token |
 | `/api/oauth/tokens/delete` | POST | Delete a token |
+
+## Testing Copilot Token Force-Refresh (Manual)
+
+This procedure verifies that ccm force-refreshes the Copilot token when it receives a 401 — eliminating the stale-token retry loop.
+
+### Prerequisites
+
+- ccm running with a Copilot provider configured and authenticated
+- `RUST_LOG=ccm=info` environment variable set when starting ccm
+
+### Steps
+
+1. **Verify startup log** — start ccm with verbose logging:
+   ```bash
+   RUST_LOG=ccm=info cargo run
+   ```
+   Look for: `Copilot session established [session_id=..., machine_id=...]`
+   If this line is absent, the binary is not updated — verify with `ccm --version`.
+
+2. **Locate the token store** — Copilot tokens are stored in:
+   ```bash
+   cat ~/.claude-code-mux/oauth_tokens.json
+   ```
+   Find the entry for your Copilot provider (e.g., `"my-copilot"`).
+
+3. **Expire the Copilot token** — stop ccm, then edit `oauth_tokens.json`:
+   - Change `"expires_at"` to a past timestamp, e.g. `"2020-01-01T00:00:00Z"`
+   - Or delete the entire Copilot provider entry from the JSON object
+   - Save the file
+
+4. **Restart ccm and make one request** — the first request will get a 401 on the expired token, then force-refresh:
+   ```bash
+   RUST_LOG=ccm=info cargo run
+   ```
+   Make one request through the proxy (e.g., from Claude Code).
+
+5. **Verify force-refresh fired** — look for this log sequence:
+   ```
+   Copilot 401: force-refreshing token [session_id=...]
+   ```
+   Followed by a successful response. If you see this, the fix is working correctly.
+
+### What success looks like
+
+- First request completes normally (not an error)
+- Log contains `Copilot 401: force-refreshing token` followed by no error
+- Subsequent requests complete normally (token is now fresh)
