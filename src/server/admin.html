@@ -2203,6 +2203,14 @@ async function apiFetch(url, options = {}) {
                 return div.innerHTML;
             }
 
+            // Escape JS string helper (for onclick attribute values)
+            function escapeJs(text) {
+                return String(text)
+                    .replace(/\\/g, '\\\\')
+                    .replace(/'/g, "\\'")
+                    .replace(/"/g, '\\"');
+            }
+
             // LocalStorage helpers
             const STORAGE_KEY = "ccm_config";
 
@@ -4356,13 +4364,13 @@ async function apiFetch(url, options = {}) {
                                         <div class="flex gap-2">
                                             <button
                                                 class="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm font-semibold hover:bg-blue-200 transition-all"
-                                                onclick="refreshOAuthToken('${escapeHtml(token.provider_id)}')"
+                                                onclick="refreshOAuthToken('${escapeJs(token.provider_id)}')"
                                             >
                                                 Refresh
                                             </button>
                                             <button
                                                 class="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm font-semibold hover:bg-red-200 transition-all"
-                                                onclick="deleteOAuthToken('${escapeHtml(token.provider_id)}')"
+                                                onclick="deleteOAuthToken('${escapeJs(token.provider_id)}')"
                                             >
                                                 Delete
                                             </button>
