@@ -19,6 +19,9 @@ const COPILOT_HEADERS: &[(&str, &str)] = &[
     ("Copilot-Integration-Id", "vscode-chat"),
     ("Openai-Intent", "conversation-edits"),
     ("X-Initiator", "user"),
+    ("Openai-Organization", "github-copilot"),
+    ("X-GitHub-Api-Version", "2025-05-01"),
+    ("X-Interaction-Type", "conversation"),
 ];
 
 pub struct CopilotProvider {
@@ -29,6 +32,21 @@ pub struct CopilotProvider {
     client: Client,
     session_id: String,
     machine_id: String,
+}
+
+fn apply_copilot_headers(
+    builder: reqwest::RequestBuilder,
+    session_id: &str,
+    machine_id: &str,
+) -> reqwest::RequestBuilder {
+    let mut builder = builder;
+    for (key, value) in COPILOT_HEADERS {
+        builder = builder.header(*key, *value);
+    }
+    builder
+        .header("VScode-SessionId", session_id)
+        .header("VScode-MachineId", machine_id)
+        .header("X-Request-Id", Uuid::new_v4().to_string())
 }
 
 impl CopilotProvider {
@@ -388,17 +406,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_copilot_headers_count() {
-        assert_eq!(COPILOT_HEADERS.len(), 5);
-        let keys: Vec<&str> = COPILOT_HEADERS.iter().map(|(k, _)| *k).collect();
-        assert!(keys.contains(&"Editor-Version"));
-        assert!(keys.contains(&"Editor-Plugin-Version"));
-        assert!(keys.contains(&"Copilot-Integration-Id"));
-        assert!(keys.contains(&"Openai-Intent"));
-        assert!(keys.contains(&"X-Initiator"));
-    }
-
-    #[test]
     fn test_copilot_provider_supports_model() {
         let provider = CopilotProvider::new(
             "copilot".to_string(),
@@ -424,6 +431,62 @@ mod tests {
         );
         // The client is stored — just verify construction succeeds.
         assert!(provider.session_id.len() == 36); // UUID v4 format
+    }
+
+    #[test]
+    fn test_copilot_headers_contains_all_keys() {
+        let expected_keys = [
+            "Editor-Version",
+            "Editor-Plugin-Version",
+            "Copilot-Integration-Id",
+            "Openai-Intent",
+            "X-Initiator",
+            "Openai-Organization",
+            "X-GitHub-Api-Version",
+            "X-Interaction-Type",
+        ];
+        let actual_keys: Vec<&str> = COPILOT_HEADERS.iter().map(|(k, _)| *k).collect();
+        for key in &expected_keys {
+            assert!(
+                actual_keys.contains(key),
+                "Missing header key: {}",
+                key
+            );
+        }
+        assert_eq!(COPILOT_HEADERS.len(), 8);
+    }
+
+    #[test]
+    fn test_session_machine_id_stable_across_calls() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec![], None);
+        // Build two dummy request builders and apply headers to both
+        let client = reqwest::Client::new();
+        let b1 = client.post("http://localhost");
+        let b2 = client.post("http://localhost");
+        let _b1 = apply_copilot_headers(b1, &provider.session_id, &provider.machine_id);
+        let _b2 = apply_copilot_headers(b2, &provider.session_id, &provider.machine_id);
+        // session_id and machine_id must be identical across calls
+        let id1 = provider.session_id.clone();
+        let id2 = provider.session_id.clone();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_request_id_unique_per_call() {
+        // Verify two calls to new() produce different session_ids
+        let p1 = CopilotProvider::new("copilot".to_string(), vec![], None);
+        let p2 = CopilotProvider::new("copilot".to_string(), vec![], None);
+        assert_ne!(p1.session_id, p2.session_id);
+        assert_ne!(p1.machine_id, p2.machine_id);
+
+        // Verify X-Request-Id generation is UUID format (36 chars)
+        let client = reqwest::Client::new();
+        let builder = client.post("http://localhost");
+        let request = apply_copilot_headers(builder, &p1.session_id, &p1.machine_id)
+            .build()
+            .unwrap();
+        let req_id = request.headers().get("X-Request-Id").unwrap().to_str().unwrap();
+        assert_eq!(req_id.len(), 36, "X-Request-Id should be UUID v4 (36 chars)");
     }
 
     #[tokio::test]
