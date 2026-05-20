@@ -78,14 +78,14 @@ impl CopilotProvider {
         }
     }
 
-    async fn get_valid_copilot_token(&self) -> Result<String, ProviderError> {
+    async fn get_valid_copilot_token(&self, force: bool) -> Result<String, ProviderError> {
         let token_store = self.token_store.as_ref().ok_or_else(|| {
             ProviderError::AuthError("TokenStore not configured for copilot provider".to_string())
         })?;
 
         // Fast path: check without lock
         if let Some(token) = token_store.get(&self.name) {
-            if !token.needs_refresh() {
+            if !force && !token.needs_refresh() {
                 return Ok(token.access_token.clone());
             }
         } else {
@@ -99,7 +99,7 @@ impl CopilotProvider {
         let _guard = self.refresh_lock.lock().await;
 
         if let Some(token) = token_store.get(&self.name) {
-            if !token.needs_refresh() {
+            if !force && !token.needs_refresh() {
                 return Ok(token.access_token.clone());
             }
 
@@ -177,8 +177,11 @@ impl CopilotProvider {
 
         // On 401, refresh and retry once
         let response = if response.status() == 401 {
-            tracing::info!("Copilot token rejected (401) in stream, refreshing and retrying");
-            let fresh_bearer = self.get_valid_copilot_token().await?;
+            tracing::info!(
+                session_id = %self.session_id,
+                "Copilot 401: force-refreshing token"
+            );
+            let fresh_bearer = self.get_valid_copilot_token(true).await?;
             let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
             let retry_builder = apply_copilot_headers(
                 self.client
@@ -244,7 +247,7 @@ impl AnthropicProvider for CopilotProvider {
         &self,
         request: AnthropicRequest,
     ) -> Result<ProviderResponse, ProviderError> {
-        let bearer = self.get_valid_copilot_token().await?;
+        let bearer = self.get_valid_copilot_token(false).await?;
         let base_url = parse_proxy_ep(&bearer);
         let url = format!("{}/chat/completions", base_url);
 
@@ -280,8 +283,11 @@ impl AnthropicProvider for CopilotProvider {
         // On 401, refresh the token once and retry — handles the race between
         // the token validity check and the actual API call.
         let response = if response.status() == 401 {
-            tracing::info!("Copilot token rejected (401), refreshing and retrying");
-            let fresh_bearer = self.get_valid_copilot_token().await?;
+            tracing::info!(
+                session_id = %self.session_id,
+                "Copilot 401: force-refreshing token"
+            );
+            let fresh_bearer = self.get_valid_copilot_token(true).await?;
             let fresh_url = format!("{}/chat/completions", parse_proxy_ep(&fresh_bearer));
             let retry_builder = apply_copilot_headers(
                 self.client
@@ -346,7 +352,7 @@ impl AnthropicProvider for CopilotProvider {
         request: AnthropicRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
     {
-        let bearer = self.get_valid_copilot_token().await?;
+        let bearer = self.get_valid_copilot_token(false).await?;
         let base_url = parse_proxy_ep(&bearer);
         let url = format!("{}/chat/completions", base_url);
         self.send_message_stream_with_url(request, &url, &bearer)
