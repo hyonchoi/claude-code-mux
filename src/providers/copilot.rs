@@ -35,11 +35,10 @@ pub struct CopilotProvider {
 }
 
 fn apply_copilot_headers(
-    builder: reqwest::RequestBuilder,
+    mut builder: reqwest::RequestBuilder,
     session_id: &str,
     machine_id: &str,
 ) -> reqwest::RequestBuilder {
-    let mut builder = builder;
     for (key, value) in COPILOT_HEADERS {
         builder = builder.header(*key, *value);
     }
@@ -510,10 +509,13 @@ mod tests {
         let b2 = client.post("http://localhost");
         let _b1 = apply_copilot_headers(b1, &provider.session_id, &provider.machine_id);
         let _b2 = apply_copilot_headers(b2, &provider.session_id, &provider.machine_id);
-        // session_id and machine_id must be identical across calls
-        let id1 = provider.session_id.clone();
-        let id2 = provider.session_id.clone();
-        assert_eq!(id1, id2);
+        // Verify VScode-SessionId is the same in both requests
+        let req1 = _b1.build().unwrap();
+        let req2 = _b2.build().unwrap();
+        let sid1 = req1.headers().get("VScode-SessionId").unwrap().to_str().unwrap();
+        let sid2 = req2.headers().get("VScode-SessionId").unwrap().to_str().unwrap();
+        assert_eq!(sid1, sid2, "VScode-SessionId must be stable across apply_copilot_headers calls");
+        assert_eq!(sid1, provider.session_id.as_str());
     }
 
     #[test]
