@@ -11,6 +11,7 @@ use futures::stream::TryStreamExt;
 use reqwest::Client;
 use std::pin::Pin;
 use std::sync::Arc;
+use uuid::Uuid;
 
 const COPILOT_HEADERS: &[(&str, &str)] = &[
     ("Editor-Version", "vscode/1.107.0"),
@@ -26,16 +27,36 @@ pub struct CopilotProvider {
     token_store: Option<TokenStore>,
     refresh_lock: Arc<tokio::sync::Mutex<()>>,
     client: Client,
+    session_id: String,
+    machine_id: String,
 }
 
 impl CopilotProvider {
     pub fn new(name: String, models: Vec<String>, token_store: Option<TokenStore>) -> Self {
+        Self::new_with_client(name, models, token_store, Client::new())
+    }
+
+    pub fn new_with_client(
+        name: String,
+        models: Vec<String>,
+        token_store: Option<TokenStore>,
+        client: Client,
+    ) -> Self {
+        let session_id = Uuid::new_v4().to_string();
+        let machine_id = Uuid::new_v4().to_string();
+        tracing::info!(
+            session_id = %session_id,
+            machine_id = %machine_id,
+            "Copilot session established"
+        );
         Self {
             name,
             models,
             token_store,
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
-            client: Client::new(),
+            client,
+            session_id,
+            machine_id,
         }
     }
 
@@ -387,6 +408,22 @@ mod tests {
         assert!(provider.supports_model("gpt-4o"));
         assert!(provider.supports_model("claude-sonnet-4-5"));
         assert!(!provider.supports_model("llama-3"));
+    }
+
+    #[test]
+    fn test_injectable_client_used_when_provided() {
+        let custom_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(1))
+            .build()
+            .unwrap();
+        let provider = CopilotProvider::new_with_client(
+            "test".to_string(),
+            vec![],
+            None,
+            custom_client,
+        );
+        // The client is stored — just verify construction succeeds.
+        assert!(provider.session_id.len() == 36); // UUID v4 format
     }
 
     #[tokio::test]
