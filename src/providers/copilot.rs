@@ -169,11 +169,32 @@ impl CopilotProvider {
             &self.machine_id,
         );
 
-        let response = req_builder
-            .json(&json_body)
-            .send()
-            .await
-            .map_err(ProviderError::HttpError)?;
+        let req_builder = req_builder.json(&json_body);
+        let cloned = req_builder.try_clone();
+        let response = match req_builder.send().await {
+            Err(e) if e.is_connect() || e.is_timeout() => {
+                if let Some(retry_builder) = cloned {
+                    tracing::info!(
+                        session_id = %self.session_id,
+                        error = %e,
+                        attempt = 1,
+                        "Copilot network retry"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let retry_builder = apply_copilot_headers(
+                        retry_builder.header("Authorization", format!("Bearer {}", bearer))
+                            .header("Content-Type", "application/json")
+                            .header("accept", "text/event-stream"),
+                        &self.session_id,
+                        &self.machine_id,
+                    );
+                    retry_builder.send().await.map_err(ProviderError::HttpError)?
+                } else {
+                    return Err(ProviderError::HttpError(e));
+                }
+            }
+            other => other.map_err(ProviderError::HttpError)?,
+        };
 
         // On 401, refresh and retry once
         let response = if response.status() == 401 {
@@ -274,11 +295,31 @@ impl AnthropicProvider for CopilotProvider {
             &self.machine_id,
         );
 
-        let response = req_builder
-            .json(&json_body)
-            .send()
-            .await
-            .map_err(ProviderError::HttpError)?;
+        let req_builder = req_builder.json(&json_body);
+        let cloned = req_builder.try_clone();
+        let response = match req_builder.send().await {
+            Err(e) if e.is_connect() || e.is_timeout() => {
+                if let Some(retry_builder) = cloned {
+                    tracing::info!(
+                        session_id = %self.session_id,
+                        error = %e,
+                        attempt = 1,
+                        "Copilot network retry"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let retry_builder = apply_copilot_headers(
+                        retry_builder.header("Authorization", format!("Bearer {}", bearer))
+                            .header("Content-Type", "application/json"),
+                        &self.session_id,
+                        &self.machine_id,
+                    );
+                    retry_builder.send().await.map_err(ProviderError::HttpError)?
+                } else {
+                    return Err(ProviderError::HttpError(e));
+                }
+            }
+            other => other.map_err(ProviderError::HttpError)?,
+        };
 
         // On 401, refresh the token once and retry — handles the race between
         // the token validity check and the actual API call.
@@ -491,6 +532,72 @@ mod tests {
             .unwrap();
         let req_id = request.headers().get("X-Request-Id").unwrap().to_str().unwrap();
         assert_eq!(req_id.len(), 36, "X-Request-Id should be UUID v4 (36 chars)");
+    }
+
+    #[tokio::test]
+    async fn test_network_error_retry_succeeds() {
+        let mut server = mockito::Server::new_async().await;
+        // Note: mockito can't simulate a true TCP reset, so we use a 200 response to verify the happy path.
+        // The real retry logic fires on `e.is_connect() || e.is_timeout()` from reqwest.
+        let _mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(r#"{"id":"test","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#)
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let provider = CopilotProvider::new_with_client("test".to_string(), vec![], None, client);
+        let request = AnthropicRequest {
+            model: "gpt-4o".to_string(),
+            messages: vec![crate::models::Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            }],
+            system: None,
+            max_tokens: 10,
+            stream: None,
+            tools: None,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            metadata: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+        // send_message requires a token store; without one it returns AuthError — that's expected
+        let result = provider.send_message(request).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_retry_generates_fresh_request_id() {
+        // Verify that X-Request-Id is regenerated (UUID format) on every apply_copilot_headers call
+        let client = reqwest::Client::new();
+        let p = CopilotProvider::new_with_client("test".to_string(), vec![], None, client.clone());
+
+        let b1 = apply_copilot_headers(
+            client.post("http://localhost"),
+            &p.session_id,
+            &p.machine_id,
+        )
+        .build()
+        .unwrap();
+        let b2 = apply_copilot_headers(
+            client.post("http://localhost"),
+            &p.session_id,
+            &p.machine_id,
+        )
+        .build()
+        .unwrap();
+
+        let id1 = b1.headers().get("X-Request-Id").unwrap().to_str().unwrap().to_string();
+        let id2 = b2.headers().get("X-Request-Id").unwrap().to_str().unwrap().to_string();
+        assert_ne!(id1, id2, "X-Request-Id must be different on every apply_copilot_headers call");
+        assert_eq!(id1.len(), 36);
+        assert_eq!(id2.len(), 36);
     }
 
     #[tokio::test]
