@@ -5,8 +5,10 @@ cargo build            # compile
 cargo run              # run dev server (default port 3000)
 cargo run --release    # production build
 cargo test             # run all tests
+cargo test <name>      # run a single test (add -- --nocapture to see output)
 cargo clippy           # lint
 cargo fmt              # format
+RUST_LOG=ccm=info cargo run  # debug mode — logs Copilot session IDs, OAuth refresh, retries
 ```
 
 Binary name: `ccm`. Config file: TOML, set via `--config <path>` (see `config/example.toml`).
@@ -14,12 +16,13 @@ Binary name: `ccm`. Config file: TOML, set via `--config <path>` (see `config/ex
 ## Codebase Structure
 
 - `src/main.rs` — CLI entry point (`--port`, `--config` flags)
+- `src/cli/` — CLI argument parsing (subcommands and flags)
 - `src/server/` — HTTP server, admin UI (`admin.html`), OAuth handlers
 - `src/router/` — intelligent routing logic (task-type detection, provider fallback)
 - `src/providers/` — per-provider API adapters
 - `src/models/` — config types and model mapping
 - `src/auth/` — API key and OAuth credential management
-- `config/` — example TOML configs (`example.toml`, `default.example.toml`)
+- `config/` — example TOML configs (`example.toml`, `copilot.example.toml`, `claude-max-oauth.example.toml`, etc.); `config/templates/` has provider-specific examples
 
 ---
 
