@@ -26,7 +26,7 @@ use tracing::{debug, error, info, trace, warn};
 // Background Copilot token refresh timing.
 // Threshold must exceed the poll interval so a freshly-refreshed 30-min token is
 // caught at the next poll instead of expiring silently between checks.
-const COPILOT_POLL_SECS: u64 = 20 * 60;
+const OAUTH_POLL_SECS: u64 = 20 * 60;
 
 /// Returns true when the token will expire before the next background refresh poll.
 fn needs_background_refresh(token: &crate::auth::OAuthToken, poll_secs: u64) -> bool {
@@ -188,7 +188,7 @@ async fn refresh_provider_if_needed(
         Some(t) => t,
         None => return,
     };
-    if !needs_background_refresh(&token, COPILOT_POLL_SECS) {
+    if !needs_background_refresh(&token, OAUTH_POLL_SECS) {
         return;
     }
     match provider_config.provider_type.as_str() {
@@ -291,10 +291,13 @@ pub async fn start_server(
     {
         let bg_token_store = state.token_store.clone();
         let bg_providers = state.config.providers.clone();
-        let bg_client = reqwest::Client::new();
+        let bg_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("failed to build background refresh HTTP client");
         tokio::spawn(async move {
             let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(COPILOT_POLL_SECS));
+                tokio::time::interval(tokio::time::Duration::from_secs(OAUTH_POLL_SECS));
             interval.tick().await; // skip the immediate first tick
             loop {
                 interval.tick().await;
@@ -2320,7 +2323,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
+        assert!(needs_background_refresh(&token, OAUTH_POLL_SECS));
     }
 
     #[test]
@@ -2334,7 +2337,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(!needs_background_refresh(&token, COPILOT_POLL_SECS));
+        assert!(!needs_background_refresh(&token, OAUTH_POLL_SECS));
     }
 
     #[test]
@@ -2348,7 +2351,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
+        assert!(needs_background_refresh(&token, OAUTH_POLL_SECS));
     }
 
     #[test]
@@ -2410,7 +2413,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
+        assert!(needs_background_refresh(&token, OAUTH_POLL_SECS));
     }
 
     #[test]
@@ -2423,7 +2426,7 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(!needs_background_refresh(&token, COPILOT_POLL_SECS));
+        assert!(!needs_background_refresh(&token, OAUTH_POLL_SECS));
     }
 
     #[test]
@@ -2436,6 +2439,6 @@ mod tests {
             enterprise_url: None,
             project_id: None,
         };
-        assert!(needs_background_refresh(&token, COPILOT_POLL_SECS));
+        assert!(needs_background_refresh(&token, OAUTH_POLL_SECS));
     }
 }
