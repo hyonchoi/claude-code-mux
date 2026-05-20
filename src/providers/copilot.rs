@@ -147,17 +147,11 @@ impl CopilotProvider {
         let delegate = Self::make_delegate();
         let openai_request = delegate.transform_request(&request)?;
 
-        let mut json_body =
+        let json_body =
             serde_json::to_value(&openai_request).map_err(|e| ProviderError::ApiError {
                 status: 500,
                 message: e.to_string(),
             })?;
-        if request.model == "auto" {
-            if let serde_json::Value::Object(ref mut map) = json_body {
-                map.remove("model");
-            }
-        }
-
         let req_builder = apply_copilot_headers(
             self.client
                 .post(url)
@@ -271,17 +265,11 @@ impl AnthropicProvider for CopilotProvider {
         let delegate = Self::make_delegate();
         let openai_request = delegate.transform_request(&request)?;
 
-        let mut json_body =
+        let json_body =
             serde_json::to_value(&openai_request).map_err(|e| ProviderError::ApiError {
                 status: 500,
                 message: e.to_string(),
             })?;
-        if request.model == "auto" {
-            if let serde_json::Value::Object(ref mut map) = json_body {
-                map.remove("model");
-            }
-        }
-
         let req_builder = apply_copilot_headers(
             self.client
                 .post(&url)
