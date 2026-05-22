@@ -10,7 +10,7 @@ use futures::stream::Stream;
 use futures::stream::TryStreamExt;
 use reqwest::Client;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
@@ -88,7 +88,7 @@ fn select_fallback_chat_model(models: &[CopilotModelInfo]) -> Option<&CopilotMod
 
 pub struct CopilotProvider {
     name: String,
-    models: Arc<RwLock<Vec<String>>>,
+    models: Arc<StdRwLock<Vec<String>>>,
     token_store: Option<TokenStore>,
     refresh_lock: Arc<Mutex<()>>,
     model_fetch_lock: Arc<Mutex<()>>,
@@ -132,7 +132,7 @@ impl CopilotProvider {
         );
         Self {
             name,
-            models: Arc::new(RwLock::new(models)),
+            models: Arc::new(StdRwLock::new(models)),
             token_store,
             refresh_lock: Arc::new(Mutex::new(())),
             model_fetch_lock: Arc::new(Mutex::new(())),
@@ -194,7 +194,13 @@ impl CopilotProvider {
     }
 
     async fn update_discovered_chat_models(&self, discovered: &[CopilotModelInfo]) {
-        let mut models = self.models.write().await;
+        let mut models = match self.models.write() {
+            Ok(models) => models,
+            Err(poisoned) => {
+                tracing::warn!("Copilot models lock poisoned; continuing with recovered state");
+                poisoned.into_inner()
+            }
+        };
         for model in discovered.iter().filter(|m| m.capabilities_type() == "chat") {
             if !models.iter().any(|existing| existing == &model.id) {
                 models.push(model.id.clone());
@@ -613,10 +619,12 @@ impl AnthropicProvider for CopilotProvider {
     }
 
     fn supports_model(&self, model: &str) -> bool {
-        if let Ok(models) = self.models.try_read() {
-            models.iter().any(|m| m == model)
-        } else {
-            false
+        match self.models.read() {
+            Ok(models) => models.iter().any(|m| m == model),
+            Err(poisoned) => {
+                tracing::warn!("Copilot models lock poisoned during read; continuing with recovered state");
+                poisoned.into_inner().iter().any(|m| m == model)
+            }
         }
     }
 }
@@ -793,6 +801,25 @@ mod tests {
         assert!(provider.supports_model("gpt-4o"));
         assert!(provider.supports_model("claude-sonnet-4-5"));
         assert!(!provider.supports_model("llama-3"));
+    }
+
+    #[test]
+    fn test_supports_model_waits_for_write_lock_instead_of_false_negative() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec!["gpt-4o".to_string()], None);
+        let models = provider.models.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            let _guard = models.write().expect("write lock should be available");
+            tx.send(()).expect("notification should be sent");
+            std::thread::sleep(Duration::from_millis(50));
+        });
+
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("writer thread should hold lock before read");
+        assert!(provider.supports_model("gpt-4o"));
+
+        handle.join().expect("writer thread should complete");
     }
 
     #[test]
