@@ -186,6 +186,20 @@ impl CopilotProvider {
                 message: "No chat fallback model found in Copilot /models response".to_string(),
             })?;
 
+        let total_models = payload.data.len();
+        let chat_models = payload
+            .data
+            .iter()
+            .filter(|m| m.capabilities_type() == "chat")
+            .count();
+        tracing::debug!(
+            session_id = %self.session_id,
+            total_models,
+            chat_models,
+            fallback_model = %fallback.id,
+            "Fetched Copilot /models and selected fallback model"
+        );
+
         Ok(CopilotModelCache {
             fetched_at: Instant::now(),
             fallback_model_id: fallback.id.clone(),
@@ -263,7 +277,14 @@ impl CopilotProvider {
 
     async fn resolve_request_model(&self, request: &mut AnthropicRequest) -> Result<(), ProviderError> {
         if request.model == "auto" {
-            request.model = self.resolve_auto_model().await?;
+            let resolved_model = self.resolve_auto_model().await?;
+            tracing::debug!(
+                session_id = %self.session_id,
+                from_model = "auto",
+                to_model = %resolved_model,
+                "Switched Copilot request model"
+            );
+            request.model = resolved_model;
         }
         Ok(())
     }
