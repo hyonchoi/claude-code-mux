@@ -1172,7 +1172,16 @@ If `zai` fails → automatically falls back to `openrouter`. **No manual interve
 - [Design Principles](docs/design-principles.md) - Claude Code Mux design philosophy and UX guidelines
 - [URL-based State Management](docs/url-state-management.md) - Admin UI URL-based state management pattern
 - [LocalStorage-based State Management](docs/localstorage-state-management.md) - Admin UI localStorage-based client state management
+- [Gemini Integration](docs/gemini-integration.md) - Gemini provider setup and integration notes
+- [OAuth Setup](docs/OAUTH_SETUP.md) - End-to-end OAuth configuration guide
+- [OAuth Testing](docs/OAUTH_TESTING.md) - Manual verification flows for OAuth providers
+- [Screenshot Guide](docs/SCREENSHOT_GUIDE.md) - How to capture and maintain documentation screenshots
 - [Operational Contracts](docs/contracts/) - Rollback, SLO, fallback selection, auth validation, and operational specs
+- [Contributing Guide](CONTRIBUTING.md) - Development workflow, coding standards, and test expectations
+- [Agent Instructions](AGENTS.md) - Project-level AI agent workflow and conventions
+- [Project TODOs](TODOS.md) - Prioritized backlog and follow-up engineering work
+- [OAuth Implementation Notes](OAUTH_IMPLEMENTATION_COMPLETE.md) - OAuth implementation completion details
+- [OAuth Summary](oauth_summary.md) - High-level OAuth rollout summary
 
 ## Changelog
 

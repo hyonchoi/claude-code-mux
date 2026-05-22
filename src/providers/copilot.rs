@@ -10,7 +10,9 @@ use futures::stream::Stream;
 use futures::stream::TryStreamExt;
 use reqwest::Client;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 const COPILOT_HEADERS: &[(&str, &str)] = &[
@@ -24,11 +26,73 @@ const COPILOT_HEADERS: &[(&str, &str)] = &[
     ("X-Interaction-Type", "conversation"),
 ];
 
+const MODEL_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Debug, Clone)]
+struct CopilotModelCache {
+    fetched_at: Instant,
+    fallback_model_id: String,
+    discovered_models: Vec<CopilotModelInfo>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CopilotModelsResponse {
+    data: Vec<CopilotModelInfo>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CopilotCapabilities {
+    #[serde(rename = "type", default)]
+    r#type: String,
+    #[serde(default)]
+    family: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CopilotModelInfo {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    family: String,
+    #[serde(default)]
+    capabilities: Option<CopilotCapabilities>,
+    #[serde(default)]
+    is_chat_fallback: bool,
+    #[serde(default)]
+    is_chat_default: bool,
+    #[serde(default)]
+    model_picker_enabled: bool,
+}
+
+impl CopilotModelInfo {
+    fn capabilities_type(&self) -> &str {
+        self.capabilities
+            .as_ref()
+            .map(|c| c.r#type.as_str())
+            .unwrap_or("")
+    }
+}
+
+fn select_fallback_chat_model(models: &[CopilotModelInfo]) -> Option<&CopilotModelInfo> {
+    models
+        .iter()
+        .find(|m| m.capabilities_type() == "chat" && m.is_chat_fallback)
+        .or_else(|| {
+            models
+                .iter()
+                .find(|m| m.capabilities_type() == "chat" && m.is_chat_default)
+        })
+        .or_else(|| models.iter().find(|m| m.capabilities_type() == "chat"))
+}
+
 pub struct CopilotProvider {
     name: String,
-    models: Vec<String>,
+    models: Arc<StdRwLock<Vec<String>>>,
     token_store: Option<TokenStore>,
-    refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    refresh_lock: Arc<Mutex<()>>,
+    model_fetch_lock: Arc<Mutex<()>>,
+    model_cache: Arc<RwLock<Option<CopilotModelCache>>>,
     client: Client,
     session_id: String,
     machine_id: String,
@@ -68,13 +132,161 @@ impl CopilotProvider {
         );
         Self {
             name,
-            models,
+            models: Arc::new(StdRwLock::new(models)),
             token_store,
-            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            refresh_lock: Arc::new(Mutex::new(())),
+            model_fetch_lock: Arc::new(Mutex::new(())),
+            model_cache: Arc::new(RwLock::new(None)),
             client,
             session_id,
             machine_id,
         }
+    }
+
+    fn is_cache_fresh(cache: &CopilotModelCache) -> bool {
+        cache.fetched_at.elapsed() < MODEL_CACHE_TTL
+    }
+
+    async fn fetch_models_cache(&self) -> Result<CopilotModelCache, ProviderError> {
+        let bearer = self.get_valid_copilot_token(false).await?;
+        let base_url = parse_proxy_ep(&bearer);
+        let url = format!("{}/models", base_url);
+
+        let req_builder = apply_copilot_headers(
+            self.client
+                .get(url)
+                .header("Authorization", format!("Bearer {}", bearer)),
+            &self.session_id,
+            &self.machine_id,
+        );
+
+        let response = req_builder.send().await.map_err(ProviderError::HttpError)?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ProviderError::ApiError {
+                status,
+                message: error_text,
+            });
+        }
+
+        let body = response.text().await.map_err(ProviderError::HttpError)?;
+        let payload: CopilotModelsResponse =
+            serde_json::from_str(&body).map_err(|e| ProviderError::ApiError {
+                status: 500,
+                message: format!("Failed to parse Copilot /models response: {e}"),
+            })?;
+
+        let fallback =
+            select_fallback_chat_model(&payload.data).ok_or_else(|| ProviderError::ApiError {
+                status: 500,
+                message: "No chat fallback model found in Copilot /models response".to_string(),
+            })?;
+
+        let total_models = payload.data.len();
+        let chat_models = payload
+            .data
+            .iter()
+            .filter(|m| m.capabilities_type() == "chat")
+            .count();
+        tracing::debug!(
+            session_id = %self.session_id,
+            total_models,
+            chat_models,
+            fallback_model = %fallback.id,
+            "Fetched Copilot /models and selected fallback model"
+        );
+
+        Ok(CopilotModelCache {
+            fetched_at: Instant::now(),
+            fallback_model_id: fallback.id.clone(),
+            discovered_models: payload.data,
+        })
+    }
+
+    async fn update_discovered_chat_models(&self, discovered: &[CopilotModelInfo]) {
+        let mut models = match self.models.write() {
+            Ok(models) => models,
+            Err(poisoned) => {
+                tracing::warn!("Copilot models lock poisoned; continuing with recovered state");
+                poisoned.into_inner()
+            }
+        };
+        for model in discovered.iter().filter(|m| m.capabilities_type() == "chat") {
+            if !models.iter().any(|existing| existing == &model.id) {
+                models.push(model.id.clone());
+            }
+        }
+    }
+
+    async fn resolve_auto_model_from_cache_or_fetch(
+        &self,
+        forced_fetch_result: Option<Result<CopilotModelCache, ProviderError>>,
+    ) -> Result<String, ProviderError> {
+        {
+            let cache = self.model_cache.read().await;
+            if let Some(cache) = cache.as_ref() {
+                if Self::is_cache_fresh(cache) {
+                    return Ok(cache.fallback_model_id.clone());
+                }
+            }
+        }
+
+        let _fetch_guard = self.model_fetch_lock.lock().await;
+
+        {
+            let cache = self.model_cache.read().await;
+            if let Some(cache) = cache.as_ref() {
+                if Self::is_cache_fresh(cache) {
+                    return Ok(cache.fallback_model_id.clone());
+                }
+            }
+        }
+
+        let fetch_result = match forced_fetch_result {
+            Some(result) => result,
+            None => self.fetch_models_cache().await,
+        };
+
+        match fetch_result {
+            Ok(new_cache) => {
+                let fallback = new_cache.fallback_model_id.clone();
+                self.update_discovered_chat_models(&new_cache.discovered_models)
+                    .await;
+                let mut cache = self.model_cache.write().await;
+                *cache = Some(new_cache);
+                Ok(fallback)
+            }
+            Err(err) => {
+                let cache = self.model_cache.read().await;
+                if let Some(stale_cache) = cache.as_ref() {
+                    tracing::warn!("Copilot /models refresh failed; serving stale cache");
+                    return Ok(stale_cache.fallback_model_id.clone());
+                }
+                Err(err)
+            }
+        }
+    }
+
+    async fn resolve_auto_model(&self) -> Result<String, ProviderError> {
+        self.resolve_auto_model_from_cache_or_fetch(None).await
+    }
+
+    async fn resolve_request_model(&self, request: &mut AnthropicRequest) -> Result<(), ProviderError> {
+        if request.model == "auto" {
+            let resolved_model = self.resolve_auto_model().await?;
+            tracing::debug!(
+                session_id = %self.session_id,
+                from_model = "auto",
+                to_model = %resolved_model,
+                "Switched Copilot request model"
+            );
+            request.model = resolved_model;
+        }
+        Ok(())
     }
 
     async fn get_valid_copilot_token(&self, force: bool) -> Result<String, ProviderError> {
@@ -256,8 +468,10 @@ impl CopilotProvider {
 impl AnthropicProvider for CopilotProvider {
     async fn send_message(
         &self,
-        request: AnthropicRequest,
+        mut request: AnthropicRequest,
     ) -> Result<ProviderResponse, ProviderError> {
+        self.resolve_request_model(&mut request).await?;
+
         let bearer = self.get_valid_copilot_token(false).await?;
         let base_url = parse_proxy_ep(&bearer);
         let url = format!("{}/chat/completions", base_url);
@@ -372,9 +586,11 @@ impl AnthropicProvider for CopilotProvider {
 
     async fn send_message_stream(
         &self,
-        request: AnthropicRequest,
+        mut request: AnthropicRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
     {
+        self.resolve_request_model(&mut request).await?;
+
         let bearer = self.get_valid_copilot_token(false).await?;
         let base_url = parse_proxy_ep(&bearer);
         let url = format!("{}/chat/completions", base_url);
@@ -424,13 +640,177 @@ impl AnthropicProvider for CopilotProvider {
     }
 
     fn supports_model(&self, model: &str) -> bool {
-        self.models.iter().any(|m| m == model)
+        match self.models.read() {
+            Ok(models) => models.iter().any(|m| m == model),
+            Err(poisoned) => {
+                tracing::warn!("Copilot models lock poisoned during read; continuing with recovered state");
+                poisoned.into_inner().iter().any(|m| m == model)
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_model(
+        id: &str,
+        capabilities_type: &str,
+        is_chat_fallback: bool,
+        is_chat_default: bool,
+    ) -> CopilotModelInfo {
+        CopilotModelInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            family: "test".to_string(),
+            capabilities: Some(CopilotCapabilities {
+                r#type: capabilities_type.to_string(),
+                family: "test".to_string(),
+            }),
+            is_chat_fallback,
+            is_chat_default,
+            model_picker_enabled: true,
+        }
+    }
+
+    #[test]
+    fn test_select_fallback_prefers_is_chat_fallback() {
+        let models = vec![
+            make_model("gpt-4o", "chat", false, true),
+            make_model("copilot-base", "chat", true, false),
+        ];
+
+        let chosen = select_fallback_chat_model(&models).expect("expected fallback model");
+        assert_eq!(chosen.id, "copilot-base");
+    }
+
+    #[test]
+    fn test_select_fallback_uses_chat_default_when_no_chat_fallback() {
+        let models = vec![make_model("gpt-4o", "chat", false, true)];
+
+        let chosen = select_fallback_chat_model(&models).expect("expected chat default");
+        assert_eq!(chosen.id, "gpt-4o");
+    }
+
+    #[test]
+    fn test_select_fallback_returns_none_when_no_chat_models() {
+        let models = vec![make_model("embed-v1", "embeddings", false, false)];
+        assert!(select_fallback_chat_model(&models).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_auto_model_uses_cached_value_before_ttl() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec![], None);
+
+        {
+            let mut cache = provider.model_cache.write().await;
+            *cache = Some(CopilotModelCache {
+                fetched_at: Instant::now(),
+                fallback_model_id: "copilot-base".to_string(),
+                discovered_models: vec![],
+            });
+        }
+
+        let resolved = provider
+            .resolve_auto_model_from_cache_or_fetch(None)
+            .await
+            .expect("cached value expected");
+        assert_eq!(resolved, "copilot-base");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_auto_model_uses_stale_cache_on_refresh_failure() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec![], None);
+
+        {
+            let mut cache = provider.model_cache.write().await;
+            *cache = Some(CopilotModelCache {
+                fetched_at: Instant::now() - (MODEL_CACHE_TTL + Duration::from_secs(1)),
+                fallback_model_id: "stale-copilot-base".to_string(),
+                discovered_models: vec![],
+            });
+        }
+
+        let resolved = provider
+            .resolve_auto_model_from_cache_or_fetch(Some(Err(ProviderError::ApiError {
+                status: 429,
+                message: "rate limited".to_string(),
+            })))
+            .await
+            .expect("stale cache should be used");
+        assert_eq!(resolved, "stale-copilot-base");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_auto_model_errors_when_no_cache_and_fetch_fails() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec![], None);
+
+        let err = provider
+            .resolve_auto_model_from_cache_or_fetch(Some(Err(ProviderError::ApiError {
+                status: 503,
+                message: "upstream unavailable".to_string(),
+            })))
+            .await
+            .expect_err("expected failure without cache");
+
+        match err {
+            ProviderError::ApiError { status, .. } => assert_eq!(status, 503),
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_request_model_rewrites_auto_from_cache() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec![], None);
+        {
+            let mut cache = provider.model_cache.write().await;
+            *cache = Some(CopilotModelCache {
+                fetched_at: Instant::now(),
+                fallback_model_id: "copilot-base".to_string(),
+                discovered_models: vec![],
+            });
+        }
+
+        let mut request = AnthropicRequest {
+            model: "auto".to_string(),
+            messages: vec![],
+            system: None,
+            max_tokens: 10,
+            stream: None,
+            tools: None,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            metadata: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        provider
+            .resolve_request_model(&mut request)
+            .await
+            .expect("auto model should resolve");
+        assert_eq!(request.model, "copilot-base");
+    }
+
+    #[tokio::test]
+    async fn test_update_discovered_chat_models_populates_supports_model() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec!["seed-model".to_string()], None);
+
+        provider
+            .update_discovered_chat_models(&[
+                make_model("copilot-base", "chat", true, false),
+                make_model("embedding-v1", "embeddings", false, false),
+            ])
+            .await;
+
+        assert!(provider.supports_model("seed-model"));
+        assert!(provider.supports_model("copilot-base"));
+        assert!(!provider.supports_model("embedding-v1"));
+    }
 
     #[test]
     fn test_copilot_provider_supports_model() {
@@ -442,6 +822,25 @@ mod tests {
         assert!(provider.supports_model("gpt-4o"));
         assert!(provider.supports_model("claude-sonnet-4-5"));
         assert!(!provider.supports_model("llama-3"));
+    }
+
+    #[test]
+    fn test_supports_model_waits_for_write_lock_instead_of_false_negative() {
+        let provider = CopilotProvider::new("copilot".to_string(), vec!["gpt-4o".to_string()], None);
+        let models = provider.models.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            let _guard = models.write().expect("write lock should be available");
+            tx.send(()).expect("notification should be sent");
+            std::thread::sleep(Duration::from_millis(50));
+        });
+
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("writer thread should hold lock before read");
+        assert!(provider.supports_model("gpt-4o"));
+
+        handle.join().expect("writer thread should complete");
     }
 
     #[test]

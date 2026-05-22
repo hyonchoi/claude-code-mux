@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Copilot 400 cascade** — after 3–6 turns, the Copilot API was returning `400 Bad Request` with no body because the proxy was sending requests without the VSCode session tracking headers the API requires. Fixed by adding `VScode-SessionId` and `VScode-MachineId` (stable UUIDs per proxy session), `X-Request-Id` (fresh UUID per request), `Openai-Organization`, `X-GitHub-Api-Version`, and `X-Interaction-Type`. Upgrade to this version to stop mid-session 400 errors.
 - **Copilot 401 retry race** — if a Copilot token was between the 5-minute refresh gate and actual expiry, a 401 retry would re-check `needs_refresh()`, find the token still valid, and return the same stale token — failing again silently. Fixed by force-invalidating the cached token on any 401 response.
+- **Copilot auto-model lock contention false negatives** — model discovery previously used a lock upgrade path that could treat normal contention as a failure and skip model resolution. The path now retries safely and avoids spurious resolution misses under concurrent requests.
 
 ### Added
 - **Copilot network retry** — single quiet retry on connect-level errors (timeout, connection reset, DNS failure). The retry regenerates a fresh `X-Request-Id`. Mid-stream failures are not retried (once SSE headers are accepted, the connection is committed).
@@ -17,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Copilot session established [session_id=..., machine_id=...]` — confirms fix is active on startup
   - `Copilot network retry [attempt=1]` — confirms single-retry path fired
   - `Copilot 401: force-refreshing token [session_id=...]` — confirms force-invalidate fired
+- **Copilot auto-model resolution** — `model: "auto"` now resolves against Copilot's `/models` API with a short TTL cache, then forwards a concrete model upstream. Users now get deterministic model selection instead of endpoint-dependent behavior.
+- Structured `tracing` for model selection decisions (`auto` resolution path, cache refresh, and fallback behavior), making it easier to diagnose which model was chosen and why.
 
 ### Changed
 - **Provider cooldown durations** — 401/403 cooldown raised from 60 s to 240 s; 429 cooldown raised from 30 s to 120 s. Providers that hit auth failures or rate limits now stay out of rotation longer, reducing hammering on struggling endpoints.
