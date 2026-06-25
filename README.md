@@ -408,6 +408,8 @@ Navigate to **Test** tab:
 
 **Flow** (first match wins): WebSearch > Subagent > Think > Background > Auto-map (transform) > Default
 
+> For the complete pipeline, model resolution, and worked examples, see the [Routing reference](docs/reference/routing.md). For why the order is what it is, see [Why routing works this way](docs/explanation/routing-design.md).
+
 > **Key Point**: WebSearch, Subagent, Think, and Background are checked first, and each one short-circuits routing. Auto-mapping is NOT a routing decision — it only rewrites the model name as the last step before the default fallback, and only if none of the higher-priority routes matched. Explicitly defined models (`[[models]]`) are exempt from the rewrite.
 
 ### 1. WebSearch (Highest Priority)
@@ -1168,19 +1170,36 @@ If `zai` fails → automatically falls back to `openrouter`. **No manual interve
 
 ## Documentation
 
+Full docs live in **[docs/](docs/README.md)**, organized by the [Diataxis](https://diataxis.fr/) framework.
+
+**New here?** Start with the [Getting Started tutorial](docs/tutorials/getting-started.md) - zero to your first routed request.
+
+**Reference (look up exact details):**
+- [Configuration reference](docs/reference/configuration.md) - every TOML table and field, with types and defaults
+- [Routing reference](docs/reference/routing.md) - the priority pipeline, auto-map, and model resolution
+- [Provider reference](docs/reference/providers.md) - every `provider_type`, its upstream format, and auth modes
+- [CLI reference](docs/reference/cli.md) - `ccm` subcommands, flags, and environment variables
+- [HTTP API reference](docs/reference/http-api.md) - the `/v1/*` inference and `/api/*` admin endpoints
+
+**Explanation (understand the design):**
+- [Architecture](docs/explanation/architecture.md) - request lifecycle and the provider-adapter abstraction
+- [Why routing works this way](docs/explanation/routing-design.md) - why auto-map runs last
+- [Provider fallback and cooldowns](docs/explanation/provider-fallback.md) - failover and the streaming boundary
+
+**Guides and provider setup:**
+- [OAuth Setup](docs/OAUTH_SETUP.md) - End-to-end OAuth configuration guide
+- [OAuth Testing](docs/OAUTH_TESTING.md) - Manual verification flows for OAuth providers
+- [Gemini Integration](docs/gemini-integration.md) - Gemini provider setup and integration notes
+
+**Admin UI internals and contributing:**
 - [Design Principles](docs/design-principles.md) - Claude Code Mux design philosophy and UX guidelines
 - [URL-based State Management](docs/url-state-management.md) - Admin UI URL-based state management pattern
 - [LocalStorage-based State Management](docs/localstorage-state-management.md) - Admin UI localStorage-based client state management
-- [Gemini Integration](docs/gemini-integration.md) - Gemini provider setup and integration notes
-- [OAuth Setup](docs/OAUTH_SETUP.md) - End-to-end OAuth configuration guide
-- [OAuth Testing](docs/OAUTH_TESTING.md) - Manual verification flows for OAuth providers
 - [Screenshot Guide](docs/SCREENSHOT_GUIDE.md) - How to capture and maintain documentation screenshots
 - [Operational Contracts](docs/contracts/) - Rollback, SLO, fallback selection, auth validation, and operational specs
 - [Contributing Guide](CONTRIBUTING.md) - Development workflow, coding standards, and test expectations
 - [Agent Instructions](AGENTS.md) - Project-level AI agent workflow and conventions
 - [Project TODOs](TODOS.md) - Prioritized backlog and follow-up engineering work
-- [OAuth Implementation Notes](OAUTH_IMPLEMENTATION_COMPLETE.md) - OAuth implementation completion details
-- [OAuth Summary](oauth_summary.md) - High-level OAuth rollout summary
 
 ## Changelog
 
