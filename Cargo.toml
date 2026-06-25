@@ -80,6 +80,7 @@ tokio-test = "0.4"
 mockito = "1"
 criterion = "0.5"          # Benchmarking
 tempfile = "3.27.0"
+tower = { version = "0.4", features = ["util"] }  # ServiceExt::oneshot for middleware tests
 
 # Property Testing
 proptest = "1"
