@@ -140,6 +140,54 @@ async fn require_api_key(
     Ok(next.run(request).await)
 }
 
+/// Returns true when the Origin header's authority matches the Host header.
+/// Origin is "scheme://host[:port]"; Host is "host[:port]". A missing scheme
+/// separator means we compare the raw values.
+fn origin_matches_host(origin: &str, host: &str) -> bool {
+    let origin_authority = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin);
+    !host.is_empty() && origin_authority == host
+}
+
+/// CSRF defense for browser-originated requests on state-changing routes.
+///
+/// Non-browser clients (Claude Code, curl, SDKs) send no `Origin` header and are
+/// unaffected. A browser cross-site request always carries an `Origin` that won't
+/// match the proxy's `Host`, so a malicious page cannot drive the control plane
+/// (config rewrite, token delete, restart) even when no api_key is configured —
+/// including via CORS "simple requests" (form posts) that skip preflight.
+async fn csrf_guard(
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    use axum::http::Method;
+    let is_state_changing = matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    );
+    if is_state_changing {
+        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+            let host = headers
+                .get(header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !origin_matches_host(origin, host) {
+                warn!(
+                    "Request rejected: cross-origin state-changing request to {} (origin={}, host={})",
+                    request.uri().path(),
+                    origin,
+                    host
+                );
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    }
+    Ok(next.run(request).await)
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -268,6 +316,28 @@ pub async fn start_server(
     config: AppConfig,
     config_path: std::path::PathBuf,
 ) -> anyhow::Result<()> {
+    // Security: refuse to expose an unauthenticated control plane on a non-loopback
+    // address. Without an api_key every /api/* route (config rewrite, OAuth token
+    // delete/refresh, restart) is open to anyone who can reach the port.
+    let host_is_loopback = matches!(
+        config.server.host.as_str(),
+        "127.0.0.1" | "::1" | "[::1]" | "localhost"
+    );
+    if config.server.api_key.is_none() {
+        if !host_is_loopback {
+            anyhow::bail!(
+                "Refusing to bind to non-loopback host '{}' without server.api_key set — \
+                 the admin/control API would be exposed unauthenticated. \
+                 Set server.api_key in your config, or bind to 127.0.0.1.",
+                config.server.host
+            );
+        }
+        warn!(
+            "⚠️  No server.api_key configured — the control plane is UNAUTHENTICATED (loopback only). \
+             Set server.api_key before binding to a non-loopback address or sharing this machine."
+        );
+    }
+
     let router = Router::new(config.clone());
 
     // Initialize OAuth token store FIRST (needed by provider registry)
@@ -372,7 +442,11 @@ pub async fn start_server(
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_key,
-        ));
+        ))
+        // CSRF defense runs first (outermost): reject cross-origin browser writes
+        // before the api_key check, so a malicious page can't drive the control
+        // plane even when no api_key is set.
+        .layer(middleware::from_fn(csrf_guard));
 
     let app = public_routes
         .merge(protected_routes)
@@ -1868,6 +1942,28 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 mod tests {
     use super::*;
     use crate::providers::ProviderConfig;
+
+    #[test]
+    fn test_origin_matches_host() {
+        // Same-origin admin UI request: allowed.
+        assert!(origin_matches_host(
+            "http://127.0.0.1:13456",
+            "127.0.0.1:13456"
+        ));
+        assert!(origin_matches_host(
+            "https://localhost:8080",
+            "localhost:8080"
+        ));
+        // Cross-site request from a malicious page: rejected.
+        assert!(!origin_matches_host("http://evil.example", "127.0.0.1:13456"));
+        // Port mismatch: rejected.
+        assert!(!origin_matches_host(
+            "http://127.0.0.1:9999",
+            "127.0.0.1:13456"
+        ));
+        // Empty host: never a match (fail closed).
+        assert!(!origin_matches_host("http://127.0.0.1:13456", ""));
+    }
 
     fn make_configs() -> Vec<ProviderConfig> {
         vec![
