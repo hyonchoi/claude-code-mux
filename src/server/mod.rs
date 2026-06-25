@@ -23,7 +23,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, trace, warn};
 
-// Background Copilot token refresh timing.
+// Background OAuth token refresh timing (Copilot, Gemini, OpenAI, Anthropic).
 // Threshold must exceed the poll interval so a freshly-refreshed 30-min token is
 // caught at the next poll instead of expiring silently between checks.
 const OAUTH_POLL_SECS: u64 = 20 * 60;
@@ -151,29 +151,70 @@ fn origin_matches_host(origin: &str, host: &str) -> bool {
     !host.is_empty() && origin_authority == host
 }
 
-/// CSRF defense for browser-originated requests on state-changing routes.
+/// Returns true when the Host header authority is a loopback name.
 ///
-/// Non-browser clients (Claude Code, curl, SDKs) send no `Origin` header and are
-/// unaffected. A browser cross-site request always carries an `Origin` that won't
-/// match the proxy's `Host`, so a malicious page cannot drive the control plane
-/// (config rewrite, token delete, restart) even when no api_key is configured —
-/// including via CORS "simple requests" (form posts) that skip preflight.
+/// Accepts `host` or `host:port` for IPv4/hostnames (e.g. `127.0.0.1:3000`,
+/// `localhost`) and the bracketed IPv6 form (`[::1]`, `[::1]:3000`). The whole
+/// 127.0.0.0/8 range counts as loopback. Used to reject DNS-rebinding: an
+/// attacker name that resolves to 127.0.0.1 still sends its own (non-loopback)
+/// Host, so trusting Origin==Host alone is insufficient when no api_key is set.
+fn host_authority_is_loopback(host: &str) -> bool {
+    let host = host.trim();
+    // Bracketed IPv6 literal: [::1] or [::1]:port
+    if let Some(rest) = host.strip_prefix('[') {
+        return match rest.split_once(']') {
+            Some((inner, _)) => inner.eq_ignore_ascii_case("::1"),
+            None => false,
+        };
+    }
+    // host or host:port
+    let bare = host.split_once(':').map(|(h, _)| h).unwrap_or(host);
+    bare.eq_ignore_ascii_case("localhost") || bare == "127.0.0.1" || bare.starts_with("127.")
+}
+
+/// CSRF defense for browser-originated requests on the control plane.
+///
+/// Two layers:
+/// 1. When no `api_key` is configured the control plane trusts the loopback bind
+///    for access control. A DNS-rebinding attacker can point an attacker-owned
+///    name at 127.0.0.1 and make a browser issue same-origin requests (Origin and
+///    Host both the attacker name), so Origin==Host is not enough. We additionally
+///    require the `Host` header itself to be a loopback authority, for every
+///    method — reads of `/api/config`/`/api/oauth/tokens` can exfiltrate too.
+/// 2. On state-changing methods we keep the cross-origin check: a browser
+///    cross-site request carries an `Origin` that won't match the proxy's `Host`.
+///
+/// Non-browser clients (Claude Code, curl, SDKs) send no `Origin` and hit a
+/// loopback `Host`, so they are unaffected.
 async fn csrf_guard(
+    State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
     use axum::http::Method;
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // Layer 1: unauthenticated control plane must only answer loopback Hosts.
+    if state.config.server.api_key.is_none() && !host_authority_is_loopback(host) {
+        warn!(
+            "Request rejected: non-loopback Host '{}' on unauthenticated control plane to {} (possible DNS rebinding)",
+            host,
+            request.uri().path()
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Layer 2: reject cross-origin state-changing browser requests.
     let is_state_changing = matches!(
         *request.method(),
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     );
     if is_state_changing {
         if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-            let host = headers
-                .get(header::HOST)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
             if !origin_matches_host(origin, host) {
                 warn!(
                     "Request rejected: cross-origin state-changing request to {} (origin={}, host={})",
@@ -444,9 +485,9 @@ pub async fn start_server(
             require_api_key,
         ))
         // CSRF defense runs first (outermost): reject cross-origin browser writes
-        // before the api_key check, so a malicious page can't drive the control
-        // plane even when no api_key is set.
-        .layer(middleware::from_fn(csrf_guard));
+        // and non-loopback Hosts (DNS rebinding) before the api_key check, so a
+        // malicious page can't drive the control plane even when no api_key is set.
+        .layer(middleware::from_fn_with_state(state.clone(), csrf_guard));
 
     let app = public_routes
         .merge(protected_routes)
@@ -1974,6 +2015,32 @@ mod tests {
         ));
         // Empty host: never a match (fail closed).
         assert!(!origin_matches_host("http://127.0.0.1:13456", ""));
+    }
+
+    #[test]
+    fn test_host_authority_is_loopback() {
+        // Loopback IPv4, with and without port, plus the whole 127.0.0.0/8 range.
+        assert!(host_authority_is_loopback("127.0.0.1"));
+        assert!(host_authority_is_loopback("127.0.0.1:13456"));
+        assert!(host_authority_is_loopback("127.1.2.3:8080"));
+        // localhost (case-insensitive) and bracketed IPv6 loopback.
+        assert!(host_authority_is_loopback("localhost"));
+        assert!(host_authority_is_loopback("LocalHost:3000"));
+        assert!(host_authority_is_loopback("[::1]"));
+        assert!(host_authority_is_loopback("[::1]:13456"));
+
+        // DNS-rebinding defense: an attacker name that resolves to 127.0.0.1
+        // still presents its own Host, which is NOT loopback — must be rejected
+        // even though origin_matches_host(attacker, attacker) would be true.
+        assert!(!host_authority_is_loopback("attacker.example.com:13456"));
+        assert!(!host_authority_is_loopback("attacker.example.com"));
+        // Non-loopback IPs and empty host: rejected (fail closed).
+        assert!(!host_authority_is_loopback("10.0.0.5:13456"));
+        assert!(!host_authority_is_loopback("192.168.1.20"));
+        assert!(!host_authority_is_loopback("[2001:db8::1]:13456"));
+        assert!(!host_authority_is_loopback(""));
+        // A name that merely starts with "127" but isn't the loopback IP.
+        assert!(!host_authority_is_loopback("127host.evil.com"));
     }
 
     fn make_configs() -> Vec<ProviderConfig> {

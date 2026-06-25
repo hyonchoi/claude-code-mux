@@ -220,4 +220,63 @@ mod tests {
         assert!(!valid_token.is_expired());
         assert!(!valid_token.needs_refresh());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_creates_file_with_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let token_path = temp_dir.path().join("tokens.json");
+        let store = TokenStore::new(token_path.clone()).unwrap();
+
+        let token = OAuthToken {
+            provider_id: "p".to_string(),
+            access_token: "a".to_string(),
+            refresh_token: "r".to_string(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            enterprise_url: None,
+            project_id: None,
+        };
+        store.save(token).unwrap();
+
+        // Newly created token file must be owner read/write only (no group/other bits).
+        let mode = fs::metadata(&token_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_tightens_preexisting_world_readable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let token_path = temp_dir.path().join("tokens.json");
+
+        // Simulate a pre-existing world-readable token file.
+        fs::write(&token_path, "{}").unwrap();
+        let mut perms = fs::metadata(&token_path).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&token_path, perms).unwrap();
+        assert_eq!(
+            fs::metadata(&token_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+
+        let store = TokenStore::new(token_path.clone()).unwrap();
+        store
+            .save(OAuthToken {
+                provider_id: "p".to_string(),
+                access_token: "a".to_string(),
+                refresh_token: "r".to_string(),
+                expires_at: Utc::now() + chrono::Duration::hours(1),
+                enterprise_url: None,
+                project_id: None,
+            })
+            .unwrap();
+
+        // persist() must tighten the existing file down to 0600.
+        let mode = fs::metadata(&token_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
 }
