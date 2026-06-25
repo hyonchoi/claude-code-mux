@@ -27,6 +27,9 @@ logs/
 # Other
 .serena
 
+# Local security audit reports (keep findings off the remote)
+.gstack/
+
 .bg-shell/
 .claude/settings.local.json
 # Added by code-review-graph
