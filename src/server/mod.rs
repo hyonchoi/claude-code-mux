@@ -57,9 +57,7 @@ fn build_refreshed_copilot_token(
 
 /// Returns the cooldown duration when a provider returns a triggering 4xx error.
 /// 401/403 → 240 seconds, 429 → 120 seconds, all others → None (no deactivation).
-fn cooldown_for_4xx(
-    e: &crate::providers::error::ProviderError,
-) -> Option<std::time::Duration> {
+fn cooldown_for_4xx(e: &crate::providers::error::ProviderError) -> Option<std::time::Duration> {
     if let crate::providers::error::ProviderError::ApiError { status, .. } = e {
         match *status {
             401 | 403 => Some(std::time::Duration::from_secs(240)),
@@ -78,6 +76,22 @@ fn is_on_cooldown(
     cooldowns
         .get(provider)
         .map_or(false, |until| std::time::Instant::now() < *until)
+}
+
+/// Places `provider` on cooldown when the error warrants one (see `cooldown_for_4xx`).
+fn apply_cooldown(
+    cooldowns: &dashmap::DashMap<String, std::time::Instant>,
+    provider: &str,
+    e: &crate::providers::error::ProviderError,
+) {
+    if let Some(duration) = cooldown_for_4xx(e) {
+        cooldowns.insert(provider.to_string(), std::time::Instant::now() + duration);
+        warn!(
+            "⏸ Provider {} on cooldown for {}s",
+            provider,
+            duration.as_secs()
+        );
+    }
 }
 
 /// Constant-time byte comparison to prevent timing side-channel attacks on API keys.
@@ -1137,17 +1151,7 @@ async fn handle_openai_chat_completions(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
-                        if let Some(duration) = cooldown_for_4xx(&e) {
-                            state.provider_cooldowns.insert(
-                                mapping.provider.clone(),
-                                std::time::Instant::now() + duration,
-                            );
-                            warn!(
-                                "⏸ Provider {} on cooldown for {}s",
-                                mapping.provider,
-                                duration.as_secs()
-                            );
-                        }
+                        apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                         fallback_failures.push(format!("{}: {}", mapping.provider, e));
                         continue;
                     }
@@ -1441,17 +1445,7 @@ async fn handle_messages(
                                 "⚠️ Provider {} streaming failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
-                            if let Some(duration) = cooldown_for_4xx(&e) {
-                                state.provider_cooldowns.insert(
-                                    mapping.provider.clone(),
-                                    std::time::Instant::now() + duration,
-                                );
-                                warn!(
-                                    "⏸ Provider {} on cooldown for {}s",
-                                    mapping.provider,
-                                    duration.as_secs()
-                                );
-                            }
+                            apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                             fallback_failures.push(format!("{} (stream): {}", mapping.provider, e));
                             continue;
                         }
@@ -1473,17 +1467,7 @@ async fn handle_messages(
                                 "⚠️ Provider {} failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
-                            if let Some(duration) = cooldown_for_4xx(&e) {
-                                state.provider_cooldowns.insert(
-                                    mapping.provider.clone(),
-                                    std::time::Instant::now() + duration,
-                                );
-                                warn!(
-                                    "⏸ Provider {} on cooldown for {}s",
-                                    mapping.provider,
-                                    duration.as_secs()
-                                );
-                            }
+                            apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                             fallback_failures.push(format!("{}: {}", mapping.provider, e));
                             continue;
                         }
@@ -1700,17 +1684,7 @@ async fn handle_count_tokens(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
-                        if let Some(duration) = cooldown_for_4xx(&e) {
-                            state.provider_cooldowns.insert(
-                                mapping.provider.clone(),
-                                std::time::Instant::now() + duration,
-                            );
-                            warn!(
-                                "⏸ Provider {} on cooldown for {}s",
-                                mapping.provider,
-                                duration.as_secs()
-                            );
-                        }
+                        apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                         continue;
                     }
                 }
@@ -2363,7 +2337,10 @@ mod tests {
             status: 401,
             message: "Unauthorized".into(),
         };
-        assert_eq!(cooldown_for_4xx(&e), Some(std::time::Duration::from_secs(240)));
+        assert_eq!(
+            cooldown_for_4xx(&e),
+            Some(std::time::Duration::from_secs(240))
+        );
     }
 
     #[test]
@@ -2372,7 +2349,10 @@ mod tests {
             status: 429,
             message: "Too Many Requests".into(),
         };
-        assert_eq!(cooldown_for_4xx(&e), Some(std::time::Duration::from_secs(120)));
+        assert_eq!(
+            cooldown_for_4xx(&e),
+            Some(std::time::Duration::from_secs(120))
+        );
     }
 
     #[test]
