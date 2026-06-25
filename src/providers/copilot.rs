@@ -215,7 +215,10 @@ impl CopilotProvider {
                 poisoned.into_inner()
             }
         };
-        for model in discovered.iter().filter(|m| m.capabilities_type() == "chat") {
+        for model in discovered
+            .iter()
+            .filter(|m| m.capabilities_type() == "chat")
+        {
             if !models.iter().any(|existing| existing == &model.id) {
                 models.push(model.id.clone());
             }
@@ -275,7 +278,10 @@ impl CopilotProvider {
         self.resolve_auto_model_from_cache_or_fetch(None).await
     }
 
-    async fn resolve_request_model(&self, request: &mut AnthropicRequest) -> Result<(), ProviderError> {
+    async fn resolve_request_model(
+        &self,
+        request: &mut AnthropicRequest,
+    ) -> Result<(), ProviderError> {
         if request.model == "auto" {
             let resolved_model = self.resolve_auto_model().await?;
             tracing::debug!(
@@ -388,9 +394,12 @@ impl CopilotProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     // Clone already has all headers from the original builder.
                     // Only regenerate X-Request-Id to avoid duplicate headers.
-                    let retry_builder = retry_builder
-                        .header("X-Request-Id", Uuid::new_v4().to_string());
-                    retry_builder.send().await.map_err(ProviderError::HttpError)?
+                    let retry_builder =
+                        retry_builder.header("X-Request-Id", Uuid::new_v4().to_string());
+                    retry_builder
+                        .send()
+                        .await
+                        .map_err(ProviderError::HttpError)?
                 } else {
                     return Err(ProviderError::HttpError(e));
                 }
@@ -507,9 +516,12 @@ impl AnthropicProvider for CopilotProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     // Clone already has all headers from the original builder.
                     // Only regenerate X-Request-Id to avoid duplicate headers.
-                    let retry_builder = retry_builder
-                        .header("X-Request-Id", Uuid::new_v4().to_string());
-                    retry_builder.send().await.map_err(ProviderError::HttpError)?
+                    let retry_builder =
+                        retry_builder.header("X-Request-Id", Uuid::new_v4().to_string());
+                    retry_builder
+                        .send()
+                        .await
+                        .map_err(ProviderError::HttpError)?
                 } else {
                     return Err(ProviderError::HttpError(e));
                 }
@@ -643,7 +655,9 @@ impl AnthropicProvider for CopilotProvider {
         match self.models.read() {
             Ok(models) => models.iter().any(|m| m == model),
             Err(poisoned) => {
-                tracing::warn!("Copilot models lock poisoned during read; continuing with recovered state");
+                tracing::warn!(
+                    "Copilot models lock poisoned during read; continuing with recovered state"
+                );
                 poisoned.into_inner().iter().any(|m| m == model)
             }
         }
@@ -798,7 +812,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_discovered_chat_models_populates_supports_model() {
-        let provider = CopilotProvider::new("copilot".to_string(), vec!["seed-model".to_string()], None);
+        let provider =
+            CopilotProvider::new("copilot".to_string(), vec!["seed-model".to_string()], None);
 
         provider
             .update_discovered_chat_models(&[
@@ -826,7 +841,8 @@ mod tests {
 
     #[test]
     fn test_supports_model_waits_for_write_lock_instead_of_false_negative() {
-        let provider = CopilotProvider::new("copilot".to_string(), vec!["gpt-4o".to_string()], None);
+        let provider =
+            CopilotProvider::new("copilot".to_string(), vec!["gpt-4o".to_string()], None);
         let models = provider.models.clone();
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -849,12 +865,8 @@ mod tests {
             .timeout(std::time::Duration::from_millis(1))
             .build()
             .unwrap();
-        let provider = CopilotProvider::new_with_client(
-            "test".to_string(),
-            vec![],
-            None,
-            custom_client,
-        );
+        let provider =
+            CopilotProvider::new_with_client("test".to_string(), vec![], None, custom_client);
         // The client is stored — just verify construction succeeds.
         assert!(provider.session_id.len() == 36); // UUID v4 format
     }
@@ -873,11 +885,7 @@ mod tests {
         ];
         let actual_keys: Vec<&str> = COPILOT_HEADERS.iter().map(|(k, _)| *k).collect();
         for key in &expected_keys {
-            assert!(
-                actual_keys.contains(key),
-                "Missing header key: {}",
-                key
-            );
+            assert!(actual_keys.contains(key), "Missing header key: {}", key);
         }
         assert_eq!(COPILOT_HEADERS.len(), 8);
     }
@@ -894,9 +902,22 @@ mod tests {
         // Verify VScode-SessionId is the same in both requests
         let req1 = _b1.build().unwrap();
         let req2 = _b2.build().unwrap();
-        let sid1 = req1.headers().get("VScode-SessionId").unwrap().to_str().unwrap();
-        let sid2 = req2.headers().get("VScode-SessionId").unwrap().to_str().unwrap();
-        assert_eq!(sid1, sid2, "VScode-SessionId must be stable across apply_copilot_headers calls");
+        let sid1 = req1
+            .headers()
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let sid2 = req2
+            .headers()
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            sid1, sid2,
+            "VScode-SessionId must be stable across apply_copilot_headers calls"
+        );
         assert_eq!(sid1, provider.session_id.as_str());
     }
 
@@ -914,8 +935,17 @@ mod tests {
         let request = apply_copilot_headers(builder, &p1.session_id, &p1.machine_id)
             .build()
             .unwrap();
-        let req_id = request.headers().get("X-Request-Id").unwrap().to_str().unwrap();
-        assert_eq!(req_id.len(), 36, "X-Request-Id should be UUID v4 (36 chars)");
+        let req_id = request
+            .headers()
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            req_id.len(),
+            36,
+            "X-Request-Id should be UUID v4 (36 chars)"
+        );
     }
 
     #[tokio::test]
@@ -977,9 +1007,24 @@ mod tests {
         .build()
         .unwrap();
 
-        let id1 = b1.headers().get("X-Request-Id").unwrap().to_str().unwrap().to_string();
-        let id2 = b2.headers().get("X-Request-Id").unwrap().to_str().unwrap().to_string();
-        assert_ne!(id1, id2, "X-Request-Id must be different on every apply_copilot_headers call");
+        let id1 = b1
+            .headers()
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let id2 = b2
+            .headers()
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(
+            id1, id2,
+            "X-Request-Id must be different on every apply_copilot_headers call"
+        );
         assert_eq!(id1.len(), 36);
         assert_eq!(id2.len(), 36);
     }
@@ -1021,19 +1066,49 @@ mod tests {
         }
 
         // VScode-SessionId is stable across calls
-        let sid1 = headers1.get("VScode-SessionId").unwrap().to_str().unwrap().to_string();
-        let sid2 = headers2.get("VScode-SessionId").unwrap().to_str().unwrap().to_string();
+        let sid1 = headers1
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let sid2 = headers2
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_eq!(sid1, sid2, "VScode-SessionId must be stable");
         assert_eq!(sid1, provider.session_id);
 
         // VScode-MachineId is stable across calls
-        let mid1 = headers1.get("VScode-MachineId").unwrap().to_str().unwrap().to_string();
-        let mid2 = headers2.get("VScode-MachineId").unwrap().to_str().unwrap().to_string();
+        let mid1 = headers1
+            .get("VScode-MachineId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let mid2 = headers2
+            .get("VScode-MachineId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_eq!(mid1, mid2, "VScode-MachineId must be stable");
 
         // X-Request-Id is unique per call
-        let rid1 = headers1.get("X-Request-Id").unwrap().to_str().unwrap().to_string();
-        let rid2 = headers2.get("X-Request-Id").unwrap().to_str().unwrap().to_string();
+        let rid1 = headers1
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let rid2 = headers2
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_ne!(rid1, rid2, "X-Request-Id must differ on each call");
         assert_eq!(rid1.len(), 36);
     }

@@ -57,9 +57,7 @@ fn build_refreshed_copilot_token(
 
 /// Returns the cooldown duration when a provider returns a triggering 4xx error.
 /// 401/403 → 240 seconds, 429 → 120 seconds, all others → None (no deactivation).
-fn cooldown_for_4xx(
-    e: &crate::providers::error::ProviderError,
-) -> Option<std::time::Duration> {
+fn cooldown_for_4xx(e: &crate::providers::error::ProviderError) -> Option<std::time::Duration> {
     if let crate::providers::error::ProviderError::ApiError { status, .. } = e {
         match *status {
             401 | 403 => Some(std::time::Duration::from_secs(240)),
@@ -302,8 +300,7 @@ pub async fn start_server(
             loop {
                 interval.tick().await;
                 for provider_config in &bg_providers {
-                    refresh_provider_if_needed(provider_config, &bg_token_store, &bg_client)
-                        .await;
+                    refresh_provider_if_needed(provider_config, &bg_token_store, &bg_client).await;
                 }
             }
         });
@@ -2360,7 +2357,10 @@ mod tests {
             status: 401,
             message: "Unauthorized".into(),
         };
-        assert_eq!(cooldown_for_4xx(&e), Some(std::time::Duration::from_secs(240)));
+        assert_eq!(
+            cooldown_for_4xx(&e),
+            Some(std::time::Duration::from_secs(240))
+        );
     }
 
     #[test]
@@ -2369,7 +2369,10 @@ mod tests {
             status: 429,
             message: "Too Many Requests".into(),
         };
-        assert_eq!(cooldown_for_4xx(&e), Some(std::time::Duration::from_secs(120)));
+        assert_eq!(
+            cooldown_for_4xx(&e),
+            Some(std::time::Duration::from_secs(120))
+        );
     }
 
     #[test]
