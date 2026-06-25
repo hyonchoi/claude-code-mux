@@ -23,7 +23,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, trace, warn};
 
-// Background Copilot token refresh timing.
+// Background OAuth token refresh timing (Copilot, Gemini, OpenAI, Anthropic).
 // Threshold must exceed the poll interval so a freshly-refreshed 30-min token is
 // caught at the next poll instead of expiring silently between checks.
 const OAUTH_POLL_SECS: u64 = 20 * 60;
@@ -78,6 +78,22 @@ fn is_on_cooldown(
         .map_or(false, |until| std::time::Instant::now() < *until)
 }
 
+/// Places `provider` on cooldown when the error warrants one (see `cooldown_for_4xx`).
+fn apply_cooldown(
+    cooldowns: &dashmap::DashMap<String, std::time::Instant>,
+    provider: &str,
+    e: &crate::providers::error::ProviderError,
+) {
+    if let Some(duration) = cooldown_for_4xx(e) {
+        cooldowns.insert(provider.to_string(), std::time::Instant::now() + duration);
+        warn!(
+            "⏸ Provider {} on cooldown for {}s",
+            provider,
+            duration.as_secs()
+        );
+    }
+}
+
 /// Constant-time byte comparison to prevent timing side-channel attacks on API keys.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -120,6 +136,144 @@ async fn require_api_key(
             );
             return Err(StatusCode::UNAUTHORIZED);
         }
+    }
+    Ok(next.run(request).await)
+}
+
+/// Returns true when the Origin header's authority matches the Host header.
+/// Origin is "scheme://host[:port]"; Host is "host[:port]". A missing scheme
+/// separator means we compare the raw values.
+fn origin_matches_host(origin: &str, host: &str) -> bool {
+    let origin_authority = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin);
+    !host.is_empty() && origin_authority == host
+}
+
+/// Returns true when the Host header authority is a loopback name.
+///
+/// Accepts `host` or `host:port` for IPv4/hostnames (e.g. `127.0.0.1:3000`,
+/// `localhost`), bare IPv6 (`::1`), and the bracketed IPv6 form (`[::1]`,
+/// `[::1]:3000`). The whole 127.0.0.0/8 range and `::1` count as loopback.
+///
+/// Loopback IPs are recognised by parsing the authority as an `IpAddr` and
+/// calling `is_loopback()` — NOT by a string prefix. A prefix check such as
+/// `starts_with("127.")` would also match attacker-controlled names like
+/// `127.0.0.1.nip.io` (nip.io/sslip.io resolve such names to 127.0.0.1),
+/// reopening the DNS-rebinding bypass this guard exists to close.
+fn host_authority_is_loopback(host: &str) -> bool {
+    use std::net::{IpAddr, Ipv6Addr};
+    let host = host.trim();
+    // Bracketed IPv6 literal: [::1] or [::1]:port
+    if let Some(rest) = host.strip_prefix('[') {
+        return match rest.split_once(']') {
+            Some((inner, _)) => inner
+                .parse::<Ipv6Addr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false),
+            None => false,
+        };
+    }
+    // Bare IP (covers bare IPv6 like `::1` and IPv4 without a port).
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip.is_loopback();
+    }
+    // Otherwise `host` or `host:port` for IPv4/hostnames.
+    let bare = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    if bare.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    bare.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// CSRF defense for browser-originated requests on the control plane.
+///
+/// Two layers:
+/// 1. When no `api_key` is configured the control plane trusts the loopback bind
+///    for access control. A DNS-rebinding attacker can point an attacker-owned
+///    name at 127.0.0.1 and make a browser issue same-origin requests (Origin and
+///    Host both the attacker name), so Origin==Host is not enough. We additionally
+///    require the `Host` header itself to be a loopback authority, for every
+///    method — reads of `/api/config`/`/api/oauth/tokens` can exfiltrate too.
+/// 2. On state-changing methods we keep the cross-origin check: a browser
+///    cross-site request carries an `Origin` that won't match the proxy's `Host`.
+///
+/// Non-browser clients (Claude Code, curl, SDKs) send no `Origin` and hit a
+/// loopback `Host`, so they are unaffected.
+async fn csrf_guard(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    use axum::http::Method;
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // Layer 1: unauthenticated control plane must only answer loopback Hosts.
+    if control_plane_requires_loopback(host, state.config.server.api_key.as_deref()) {
+        warn!(
+            "Request rejected: non-loopback Host '{}' on unauthenticated control plane to {} (possible DNS rebinding)",
+            host,
+            request.uri().path()
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Layer 2: reject cross-origin state-changing browser requests.
+    let is_state_changing = matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    );
+    if is_state_changing {
+        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+            if !origin_matches_host(origin, host) {
+                warn!(
+                    "Request rejected: cross-origin state-changing request to {} (origin={}, host={})",
+                    request.uri().path(),
+                    origin,
+                    host
+                );
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    }
+    Ok(next.run(request).await)
+}
+
+/// DNS-rebinding guard for the data plane.
+///
+/// The data plane authenticates via an explicit `api_key` header, so it is not a
+/// CSRF target and — unlike the control plane — gets NO Origin check (a
+/// cross-origin browser client with a valid key is legitimate). But when no
+/// `api_key` is configured, [`require_api_key`] allows everything, so a
+/// DNS-rebinding page could rebind an attacker hostname to 127.0.0.1 and drive
+/// `/v1/*` to spend tokens and read model output. Closing that: when no api_key,
+/// the `Host` must be a loopback authority — the same predicate the bind-time and
+/// control-plane gates use ([`control_plane_requires_loopback`]). When an api_key
+/// IS set this is a no-op; the key is the gate and non-loopback Hosts are fine.
+async fn data_plane_rebinding_guard(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if control_plane_requires_loopback(host, state.config.server.api_key.as_deref()) {
+        warn!(
+            "Request rejected: non-loopback Host '{}' on unauthenticated data plane to {} (possible DNS rebinding)",
+            host,
+            request.uri().path()
+        );
+        return Err(StatusCode::FORBIDDEN);
     }
     Ok(next.run(request).await)
 }
@@ -223,7 +377,11 @@ async fn refresh_provider_if_needed(
                 "openai" => crate::auth::OAuthConfig::openai_codex(),
                 _ => crate::auth::OAuthConfig::anthropic(),
             };
-            let oauth_client = crate::auth::OAuthClient::new(oauth_config, token_store.clone());
+            let oauth_client = crate::auth::OAuthClient::with_client(
+                oauth_config,
+                token_store.clone(),
+                client.clone(),
+            );
             match oauth_client.refresh_token(&provider_id).await {
                 Ok(_) => {
                     info!(
@@ -243,11 +401,89 @@ async fn refresh_provider_if_needed(
     }
 }
 
+/// Treat a blank or whitespace-only `server.api_key` as unset.
+///
+/// An empty string is `Some("")`, which would defeat every `api_key.is_none()`
+/// control-plane gate (bind guard + CSRF Layer 1) while `require_api_key`'s
+/// `constant_time_eq("", "")` authorizes every request — serving the control
+/// plane unauthenticated on all interfaces. Operators hit this by templating an
+/// empty env var into `api_key`. Normalizing once, before the config is shared,
+/// makes all three gates agree and fail closed (loopback-only).
+fn normalize_api_key(api_key: Option<String>) -> Option<String> {
+    match api_key {
+        Some(k) if k.trim().is_empty() => None,
+        other => other,
+    }
+}
+
+/// The control plane trusts the loopback bind for access control only when no
+/// `api_key` is configured. Returns true when this bind/request must therefore
+/// be confined to a loopback authority. Shared verbatim by the bind-time gate
+/// ([`control_plane_bind_guard`]) and the request-time gate ([`csrf_guard`]) so
+/// the api_key-coupling AND the loopback definition stay in lockstep — neither
+/// half can drift between the two sites.
+fn control_plane_requires_loopback(host: &str, api_key: Option<&str>) -> bool {
+    api_key.is_none() && !host_authority_is_loopback(host)
+}
+
+/// Bind-time guard for the control plane.
+///
+/// Returns `Err(explanation)` when binding to `host` without an `api_key` would
+/// expose the unauthenticated admin/control API on a non-loopback address.
+/// Uses [`control_plane_requires_loopback`], the same predicate [`csrf_guard`]
+/// enforces at request time, so the bind-time and request-time gates cannot
+/// silently diverge.
+fn control_plane_bind_guard(host: &str, api_key: Option<&str>) -> Result<(), String> {
+    if control_plane_requires_loopback(host, api_key) {
+        return Err(format!(
+            "Refusing to bind to non-loopback host '{}' without server.api_key set — \
+             the admin/control API would be exposed unauthenticated. \
+             Set server.api_key in your config, or bind to 127.0.0.1.",
+            host
+        ));
+    }
+    Ok(())
+}
+
 /// Start the HTTP server
 pub async fn start_server(
     config: AppConfig,
     config_path: std::path::PathBuf,
 ) -> anyhow::Result<()> {
+    // Normalize a blank/whitespace-only api_key to None BEFORE any gate reads it,
+    // so the bind guard, csrf_guard, and require_api_key all agree. An empty
+    // string would otherwise be Some("") — passing every is_none() gate while
+    // constant_time_eq("","") authorizes all requests, fully opening the control
+    // plane. AppState is built from this config below, so normalizing here covers
+    // the request-time gates too.
+    let mut config = config;
+    if config
+        .server
+        .api_key
+        .as_deref()
+        .is_some_and(|k| k.trim().is_empty())
+    {
+        warn!(
+            "server.api_key is set but empty/whitespace — treating as UNSET (loopback-only). \
+             Set a non-empty key to authenticate the control plane on a shared address."
+        );
+    }
+    config.server.api_key = normalize_api_key(config.server.api_key);
+
+    // Security: refuse to expose an unauthenticated control plane on a non-loopback
+    // address. Without an api_key every /api/* route (config rewrite, OAuth token
+    // delete/refresh, restart) is open to anyone who can reach the port.
+    // Reuse the same loopback definition as csrf_guard so the bind-time gate and
+    // the request-time gate cannot silently diverge.
+    control_plane_bind_guard(&config.server.host, config.server.api_key.as_deref())
+        .map_err(|e| anyhow::anyhow!(e))?;
+    if config.server.api_key.is_none() {
+        warn!(
+            "⚠️  No server.api_key configured — the control plane is UNAUTHENTICATED (loopback only). \
+             Set server.api_key before binding to a non-loopback address or sharing this machine."
+        );
+    }
+
     let router = Router::new(config.clone());
 
     // Initialize OAuth token store FIRST (needed by provider registry)
@@ -313,11 +549,30 @@ pub async fn start_server(
         .route("/api/oauth/callback", get(oauth_handlers::oauth_callback))
         .route("/auth/callback", get(oauth_handlers::oauth_callback));
 
-    // Protected routes (auth middleware applied when api_key is configured)
-    let protected_routes = AxumRouter::new()
+    // Data-plane routes: the LLM proxy endpoints. Authenticated by an explicit
+    // `api_key` header (not ambient cookies), so they are NOT a CSRF target and
+    // get no Origin check — a cross-origin browser client with a valid api_key,
+    // or a non-browser client reaching a non-loopback Host, must not be 403'd.
+    // They DO get the DNS-rebinding guard: when no api_key is configured,
+    // require_api_key allows everything, so without it a rebinding page could
+    // drive /v1/* to spend tokens and exfiltrate model output via a loopback bind.
+    let data_plane_routes = AxumRouter::new()
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
         .route("/v1/chat/completions", post(handle_openai_chat_completions))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            data_plane_rebinding_guard,
+        ));
+
+    // Control-plane routes: config rewrite, OAuth token management, restart.
+    // These trust the loopback bind for access control when no api_key is set, so
+    // they get the full CSRF + DNS-rebinding guard in addition to require_api_key.
+    let control_plane_routes = AxumRouter::new()
         .route("/api/models", get(get_models))
         .route("/api/providers", get(get_providers))
         .route("/api/models-config", get(get_models_config))
@@ -352,10 +607,15 @@ pub async fn start_server(
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_key,
-        ));
+        ))
+        // CSRF defense runs first (outermost): reject cross-origin browser writes
+        // and non-loopback Hosts (DNS rebinding) before the api_key check, so a
+        // malicious page can't drive the control plane even when no api_key is set.
+        .layer(middleware::from_fn_with_state(state.clone(), csrf_guard));
 
     let app = public_routes
-        .merge(protected_routes)
+        .merge(data_plane_routes)
+        .merge(control_plane_routes)
         .with_state(state.clone());
 
     // Clone state before moving it
@@ -723,8 +983,9 @@ async fn restart_server(State(state): State<Arc<AppState>>) -> Response {
 
     let port = state.config.server.port;
 
-    // Create a shell script to handle restart
-    match create_and_execute_restart_script(port) {
+    // Create a shell script to handle restart. Forward the config path so the
+    // new process boots with the same config the running one used.
+    match create_and_execute_restart_script(port, Some(state.config_path.as_path())) {
         Ok(_) => {
             info!("✅ Restart script initiated");
 
@@ -746,8 +1007,23 @@ async fn restart_server(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// Create and execute a shell script that waits for shutdown and restarts
-fn create_and_execute_restart_script(port: u16) -> std::io::Result<()> {
+/// POSIX-safe single-quote: wrap `s` in single quotes, escaping any embedded
+/// single quote as `'\''`. Without this, an executable or config path containing
+/// a `'` would break out of the script's quoting — shell injection in a script
+/// the server then executes as itself.
+#[cfg(unix)]
+fn sh_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Create and execute a shell script that waits for shutdown and restarts.
+/// `config_path` (when present) is forwarded as `--config` so a UI-triggered
+/// restart boots with the same config the running process used, instead of
+/// silently falling back to the default config/providers/auth posture.
+fn create_and_execute_restart_script(
+    port: u16,
+    config_path: Option<&std::path::Path>,
+) -> std::io::Result<()> {
     use std::fs;
     use std::process::Command;
 
@@ -762,36 +1038,63 @@ fn create_and_execute_restart_script(port: u16) -> std::io::Result<()> {
 
     #[cfg(unix)]
     {
-        // Create shell script
+        // Build the start command with shell-safe quoting on every interpolated
+        // path, forwarding --config when known so the new process matches the old.
+        let exe_q = sh_single_quote(&exe_path.to_string_lossy());
+        let config_arg = match config_path {
+            Some(p) => format!(" --config {}", sh_single_quote(&p.to_string_lossy())),
+            None => String::new(),
+        };
         let script_content = format!(
             r#"#!/bin/bash
 # Wait for old process to exit
-while kill -0 {} 2>/dev/null; do
+while kill -0 {pid} 2>/dev/null; do
     sleep 0.1
 done
 # Start new server
-'{}' start --port {} > /dev/null 2>&1 &
+{exe} start --port {port}{config_arg} > /dev/null 2>&1 &
 "#,
-            current_pid,
-            exe_path.display(),
-            port
+            pid = current_pid,
+            exe = exe_q,
+            port = port,
+            config_arg = config_arg,
         );
 
-        let script_path = "/tmp/ccm_restart.sh";
-        fs::write(script_path, script_content)?;
+        // Write the script into the user-owned config dir, not a world-writable
+        // /tmp path. A fixed /tmp/ccm_restart.sh lets any other local user
+        // symlink or race-replace the script that we then execute as ourselves.
+        // If no home dir resolves, fail closed rather than degrading to a shared
+        // temp dir — falling back to std::env::temp_dir() would reopen exactly
+        // that predictable-path symlink/TOCTOU vector for the script we exec.
+        let dir = dirs::home_dir()
+            .map(|h| h.join(".claude-code-mux"))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Cannot resolve home directory to write the restart script safely; \
+                     refusing to fall back to a world-writable temp path. Restart manually.",
+                )
+            })?;
+        fs::create_dir_all(&dir)?;
+        let script_path = dir.join("restart.sh");
 
-        // Make executable
-        #[cfg(unix)]
+        // Create with 0700 (owner-only) from the start; executed via `sh <path>`
+        // so no execute bit is required.
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(script_path)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(script_path, perms)?;
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o700)
+                .open(&script_path)?;
+            file.write_all(script_content.as_bytes())?;
         }
 
         // Execute script in background
         Command::new("sh")
-            .arg(script_path)
+            .arg(&script_path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -806,19 +1109,37 @@ done
         let script_content = format!(
             r#"@echo off
 :wait
-tasklist /FI "PID eq {}" 2>NUL | find /I /N "ccm.exe">NUL
+tasklist /FI "PID eq {pid}" 2>NUL | find /I /N "ccm.exe">NUL
 if "%ERRORLEVEL%"=="0" (
     timeout /t 1 /nobreak > nul
     goto wait
 )
-start "" "{}" start --port {}
+start "" "{exe}" start --port {port}{config_arg}
 "#,
-            current_pid,
-            exe_path.display(),
-            port
+            pid = current_pid,
+            exe = exe_path.display(),
+            port = port,
+            config_arg = match config_path {
+                Some(p) => format!(" --config \"{}\"", p.display()),
+                None => String::new(),
+            },
         );
 
-        let script_path = std::env::temp_dir().join("ccm_restart.bat");
+        // Write into the user-owned config dir, not a shared temp path. A fixed
+        // name in a world-writable %TEMP% lets another local user plant/replace
+        // the .bat we then execute as ourselves. Fail closed if no home dir
+        // resolves rather than degrading to env::temp_dir() (mirrors the Unix path).
+        let dir = dirs::home_dir()
+            .map(|h| h.join(".claude-code-mux"))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Cannot resolve home directory to write the restart script safely; \
+                     refusing to fall back to a world-writable temp path. Restart manually.",
+                )
+            })?;
+        fs::create_dir_all(&dir)?;
+        let script_path = dir.join("ccm_restart.bat");
         fs::write(&script_path, script_content)?;
 
         // Execute batch file
@@ -1131,17 +1452,7 @@ async fn handle_openai_chat_completions(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
-                        if let Some(duration) = cooldown_for_4xx(&e) {
-                            state.provider_cooldowns.insert(
-                                mapping.provider.clone(),
-                                std::time::Instant::now() + duration,
-                            );
-                            warn!(
-                                "⏸ Provider {} on cooldown for {}s",
-                                mapping.provider,
-                                duration.as_secs()
-                            );
-                        }
+                        apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                         fallback_failures.push(format!("{}: {}", mapping.provider, e));
                         continue;
                     }
@@ -1435,17 +1746,7 @@ async fn handle_messages(
                                 "⚠️ Provider {} streaming failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
-                            if let Some(duration) = cooldown_for_4xx(&e) {
-                                state.provider_cooldowns.insert(
-                                    mapping.provider.clone(),
-                                    std::time::Instant::now() + duration,
-                                );
-                                warn!(
-                                    "⏸ Provider {} on cooldown for {}s",
-                                    mapping.provider,
-                                    duration.as_secs()
-                                );
-                            }
+                            apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                             fallback_failures.push(format!("{} (stream): {}", mapping.provider, e));
                             continue;
                         }
@@ -1467,17 +1768,7 @@ async fn handle_messages(
                                 "⚠️ Provider {} failed: {}, trying next fallback",
                                 mapping.provider, e
                             );
-                            if let Some(duration) = cooldown_for_4xx(&e) {
-                                state.provider_cooldowns.insert(
-                                    mapping.provider.clone(),
-                                    std::time::Instant::now() + duration,
-                                );
-                                warn!(
-                                    "⏸ Provider {} on cooldown for {}s",
-                                    mapping.provider,
-                                    duration.as_secs()
-                                );
-                            }
+                            apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                             fallback_failures.push(format!("{}: {}", mapping.provider, e));
                             continue;
                         }
@@ -1694,17 +1985,7 @@ async fn handle_count_tokens(
                             "⚠️ Provider {} failed: {}, trying next fallback",
                             mapping.provider, e
                         );
-                        if let Some(duration) = cooldown_for_4xx(&e) {
-                            state.provider_cooldowns.insert(
-                                mapping.provider.clone(),
-                                std::time::Instant::now() + duration,
-                            );
-                            warn!(
-                                "⏸ Provider {} on cooldown for {}s",
-                                mapping.provider,
-                                duration.as_secs()
-                            );
-                        }
+                        apply_cooldown(&state.provider_cooldowns, &mapping.provider, &e);
                         continue;
                     }
                 }
@@ -1888,6 +2169,72 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 mod tests {
     use super::*;
     use crate::providers::ProviderConfig;
+
+    #[test]
+    fn test_origin_matches_host() {
+        // Same-origin admin UI request: allowed.
+        assert!(origin_matches_host(
+            "http://127.0.0.1:13456",
+            "127.0.0.1:13456"
+        ));
+        assert!(origin_matches_host(
+            "https://localhost:8080",
+            "localhost:8080"
+        ));
+        // Cross-site request from a malicious page: rejected.
+        assert!(!origin_matches_host(
+            "http://evil.example",
+            "127.0.0.1:13456"
+        ));
+        // Port mismatch: rejected.
+        assert!(!origin_matches_host(
+            "http://127.0.0.1:9999",
+            "127.0.0.1:13456"
+        ));
+        // Empty host: never a match (fail closed).
+        assert!(!origin_matches_host("http://127.0.0.1:13456", ""));
+        // Scheme-less Origin (no "://"): raw values compared directly.
+        assert!(origin_matches_host("127.0.0.1:13456", "127.0.0.1:13456"));
+        assert!(!origin_matches_host("evil.example", "127.0.0.1:13456"));
+    }
+
+    #[test]
+    fn test_host_authority_is_loopback() {
+        // Loopback IPv4, with and without port, plus the whole 127.0.0.0/8 range.
+        assert!(host_authority_is_loopback("127.0.0.1"));
+        assert!(host_authority_is_loopback("127.0.0.1:13456"));
+        assert!(host_authority_is_loopback("127.1.2.3:8080"));
+        // localhost (case-insensitive) and bracketed IPv6 loopback.
+        assert!(host_authority_is_loopback("localhost"));
+        assert!(host_authority_is_loopback("LocalHost:3000"));
+        assert!(host_authority_is_loopback("[::1]"));
+        assert!(host_authority_is_loopback("[::1]:13456"));
+
+        // DNS-rebinding defense: an attacker name that resolves to 127.0.0.1
+        // still presents its own Host, which is NOT loopback — must be rejected
+        // even though origin_matches_host(attacker, attacker) would be true.
+        assert!(!host_authority_is_loopback("attacker.example.com:13456"));
+        assert!(!host_authority_is_loopback("attacker.example.com"));
+        // Non-loopback IPs and empty host: rejected (fail closed).
+        assert!(!host_authority_is_loopback("10.0.0.5:13456"));
+        assert!(!host_authority_is_loopback("192.168.1.20"));
+        assert!(!host_authority_is_loopback("[2001:db8::1]:13456"));
+        assert!(!host_authority_is_loopback(""));
+        // A name that merely starts with "127" but isn't the loopback IP.
+        assert!(!host_authority_is_loopback("127host.evil.com"));
+
+        // Bare IPv6 loopback (no brackets) is accepted; bare non-loopback IPv6 is not.
+        assert!(host_authority_is_loopback("::1"));
+        assert!(!host_authority_is_loopback("2001:db8::1"));
+
+        // Regression (DNS-rebinding bypass): names that START WITH "127." but are
+        // NOT a loopback IP. nip.io/sslip.io resolve these to 127.0.0.1, so a
+        // prefix check like starts_with("127.") would wrongly accept them and
+        // reopen the bypass. They must be rejected — the Host is the attacker name.
+        assert!(!host_authority_is_loopback("127.0.0.1.nip.io"));
+        assert!(!host_authority_is_loopback("127.0.0.1.nip.io:13456"));
+        assert!(!host_authority_is_loopback("127.0.0.1.attacker.com"));
+    }
 
     fn make_configs() -> Vec<ProviderConfig> {
         vec![
@@ -2407,6 +2754,29 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_cooldown_inserts_when_error_warrants() {
+        let cooldowns: dashmap::DashMap<String, std::time::Instant> = dashmap::DashMap::new();
+        let e = crate::providers::error::ProviderError::ApiError {
+            status: 401,
+            message: "Unauthorized".into(),
+        };
+        apply_cooldown(&cooldowns, "my-provider", &e);
+        assert!(is_on_cooldown(&cooldowns, "my-provider"));
+    }
+
+    #[test]
+    fn test_apply_cooldown_noop_when_error_does_not_warrant() {
+        let cooldowns: dashmap::DashMap<String, std::time::Instant> = dashmap::DashMap::new();
+        let e = crate::providers::error::ProviderError::ApiError {
+            status: 500,
+            message: "Internal Server Error".into(),
+        };
+        apply_cooldown(&cooldowns, "my-provider", &e);
+        assert!(!is_on_cooldown(&cooldowns, "my-provider"));
+        assert!(cooldowns.is_empty());
+    }
+
+    #[test]
     fn test_needs_background_refresh_returns_true_when_near_expiry() {
         let token = crate::auth::OAuthToken {
             provider_id: "test".into(),
@@ -2443,5 +2813,273 @@ mod tests {
             project_id: None,
         };
         assert!(needs_background_refresh(&token, OAUTH_POLL_SECS));
+    }
+
+    #[test]
+    fn test_normalize_api_key_blank_becomes_none() {
+        // The exploit vector: Some("") would pass api_key.is_none() gates as
+        // "configured" while authorizing every request. Must collapse to None.
+        assert_eq!(normalize_api_key(Some("".into())), None);
+        assert_eq!(normalize_api_key(Some("   ".into())), None);
+        assert_eq!(normalize_api_key(Some("\t\n".into())), None);
+        // Real keys (including ones with surrounding content) are preserved.
+        assert_eq!(
+            normalize_api_key(Some("secret".into())),
+            Some("secret".into())
+        );
+        assert_eq!(normalize_api_key(None), None);
+    }
+
+    #[test]
+    fn test_bind_guard_rejects_empty_api_key_on_non_loopback() {
+        // A blank api_key normalizes to None, so the bind guard must treat a
+        // non-loopback bind as unauthenticated and refuse it.
+        let normalized = normalize_api_key(Some("".into()));
+        assert!(control_plane_bind_guard("0.0.0.0", normalized.as_deref()).is_err());
+    }
+
+    // --- control_plane_bind_guard (start_server bind-time gate) ---------------
+
+    #[test]
+    fn test_bind_guard_rejects_non_loopback_without_api_key() {
+        // The exact condition start_server refuses: open control plane on a
+        // routable address. Must fail closed.
+        let err = control_plane_bind_guard("0.0.0.0", None)
+            .expect_err("non-loopback bind without api_key must be refused");
+        assert!(err.contains("0.0.0.0"));
+        assert!(control_plane_bind_guard("192.168.1.10", None).is_err());
+        // DNS-rebinding name that resolves to loopback is still its own Host.
+        assert!(control_plane_bind_guard("127.0.0.1.nip.io", None).is_err());
+    }
+
+    #[test]
+    fn test_bind_guard_allows_loopback_without_api_key() {
+        assert!(control_plane_bind_guard("127.0.0.1", None).is_ok());
+        assert!(control_plane_bind_guard("localhost", None).is_ok());
+        assert!(control_plane_bind_guard("::1", None).is_ok());
+    }
+
+    #[test]
+    fn test_bind_guard_allows_non_loopback_with_api_key() {
+        // With an api_key, require_api_key protects the control plane, so a
+        // routable bind is permitted.
+        assert!(control_plane_bind_guard("0.0.0.0", Some("secret")).is_ok());
+    }
+
+    // --- csrf_guard middleware wiring (end-to-end via tower) ------------------
+
+    use crate::cli::ServerConfig;
+    use tower::util::ServiceExt; // for `oneshot`
+
+    fn make_app_state(api_key: Option<String>) -> Arc<AppState> {
+        let mut config = AppConfig {
+            server: ServerConfig::default(),
+            router: crate::cli::RouterConfig {
+                default: "default.model".to_string(),
+                subagent: None,
+                background: None,
+                think: None,
+                websearch: None,
+                auto_map_regex: None,
+                background_regex: None,
+            },
+            providers: vec![],
+            models: vec![],
+        };
+        config.server.api_key = api_key;
+        let temp = tempfile::TempDir::new().unwrap();
+        let token_store = TokenStore::new(temp.path().join("tokens.json")).unwrap();
+        // Keep the TempDir alive for the lifetime of the test by leaking it;
+        // tests are short-lived processes so this is fine and avoids threading
+        // the guard through the returned Arc.
+        std::mem::forget(temp);
+        Arc::new(AppState {
+            config: config.clone(),
+            router: Router::new(config),
+            provider_registry: Arc::new(ProviderRegistry::new()),
+            token_store,
+            config_path: std::path::PathBuf::from("/tmp/ccm-test-config.toml"),
+            provider_cooldowns: Arc::new(dashmap::DashMap::new()),
+        })
+    }
+
+    fn csrf_app(state: Arc<AppState>) -> axum::Router {
+        axum::Router::new()
+            .route("/api/config", axum::routing::get(|| async { "ok" }))
+            .route("/api/config", axum::routing::post(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(state, csrf_guard))
+    }
+
+    async fn run_request(state: Arc<AppState>, req: Request<Body>) -> StatusCode {
+        csrf_app(state).oneshot(req).await.unwrap().status()
+    }
+
+    #[test]
+    fn test_sh_single_quote_escapes_embedded_quote() {
+        // Plain path: simple wrap.
+        assert_eq!(sh_single_quote("/usr/bin/ccm"), "'/usr/bin/ccm'");
+        // A path containing a single quote must not break out of the quoting —
+        // ' becomes '\'' so the restart script can't be injected.
+        assert_eq!(sh_single_quote("/tmp/a'b"), "'/tmp/a'\\''b'");
+    }
+
+    fn dp_app(state: Arc<AppState>) -> axum::Router {
+        axum::Router::new()
+            .route("/v1/messages", axum::routing::post(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                data_plane_rebinding_guard,
+            ))
+    }
+
+    async fn run_dp_request(state: Arc<AppState>, req: Request<Body>) -> StatusCode {
+        dp_app(state).oneshot(req).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn test_data_plane_guard_rejects_non_loopback_unauthenticated() {
+        // No api_key + non-loopback Host (DNS rebinding) → 403, closing the
+        // token-spend / model-output exfil vector on /v1/*.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/messages")
+            .header(header::HOST, "attacker.example.com")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            run_dp_request(make_app_state(None), req).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn test_data_plane_guard_allows_loopback_unauthenticated() {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/messages")
+            .header(header::HOST, "127.0.0.1:3456")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            run_dp_request(make_app_state(None), req).await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn test_data_plane_guard_noop_when_api_key_configured() {
+        // With an api_key, the key is the gate — a non-loopback Host is fine, so
+        // legitimate cross-origin/remote api_key clients are never 403'd here.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/messages")
+            .header(header::HOST, "proxy.internal:3456")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            run_dp_request(make_app_state(Some("secret".into())), req).await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn test_csrf_guard_layer1_rejects_non_loopback_host_unauthenticated() {
+        // No api_key + non-loopback Host (DNS rebinding) → 403, even for a read.
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/config")
+            .header(header::HOST, "attacker.example.com")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            run_request(make_app_state(None), req).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn test_csrf_guard_layer1_allows_loopback_host_unauthenticated() {
+        // No api_key + loopback Host → pass-through read.
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/config")
+            .header(header::HOST, "127.0.0.1:3456")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(run_request(make_app_state(None), req).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_guard_layer1_skipped_when_api_key_configured() {
+        // With an api_key, layer 1 is skipped — require_api_key (a separate
+        // middleware) handles auth, so csrf_guard lets a non-loopback Host pass.
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/config")
+            .header(header::HOST, "proxy.internal:3456")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            run_request(make_app_state(Some("secret".into())), req).await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn test_csrf_guard_layer2_rejects_cross_origin_state_change() {
+        // Loopback Host but a cross-site Origin on a POST → 403.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/config")
+            .header(header::HOST, "127.0.0.1:3456")
+            .header(header::ORIGIN, "http://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            run_request(make_app_state(None), req).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn test_csrf_guard_layer2_enforced_even_with_api_key() {
+        // Layer 2 (cross-origin reject) applies regardless of api_key — an
+        // authenticated client is still blocked from cross-site state changes.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/config")
+            .header(header::HOST, "127.0.0.1:3456")
+            .header(header::ORIGIN, "http://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            run_request(make_app_state(Some("secret".into())), req).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn test_csrf_guard_layer2_allows_same_origin_state_change() {
+        // Same-origin admin UI POST → allowed.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/config")
+            .header(header::HOST, "127.0.0.1:3456")
+            .header(header::ORIGIN, "http://127.0.0.1:3456")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(run_request(make_app_state(None), req).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_guard_layer2_allows_state_change_without_origin() {
+        // Non-browser client (curl/SDK) sends no Origin on a loopback Host → allowed.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/config")
+            .header(header::HOST, "127.0.0.1:3456")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(run_request(make_app_state(None), req).await, StatusCode::OK);
     }
 }

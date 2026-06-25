@@ -132,16 +132,48 @@ impl TokenStore {
         let tokens = self.tokens.read().unwrap();
         let json = serde_json::to_string_pretty(&*tokens).context("Failed to serialize tokens")?;
 
-        fs::write(&self.file_path, json).context("Failed to write token file")?;
+        // Atomic replace: write to a sibling temp file, fsync it, then rename
+        // over the target. A crash, disk-full, or interrupted write can only
+        // damage the temp file — never truncate the live token store, which
+        // would lose every provider's refresh token and force a full re-auth.
+        // On Unix the temp is created 0600 from the start so there is no window
+        // where the token file is world-readable (fs::write would create at the
+        // process umask, typically 0644). The rename inherits the temp's 0600
+        // inode, so a pre-existing looser-mode target ends up 0600 too.
+        let file_name = self
+            .file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("oauth_tokens.json");
+        let tmp_path =
+            self.file_path
+                .with_file_name(format!(".{}.{}.tmp", file_name, std::process::id()));
 
-        // Set file permissions to 0600 (owner read/write only)
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&self.file_path)?.permissions();
-            perms.set_mode(0o600);
-            fs::set_permissions(&self.file_path, perms)?;
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp_path)
+                .context("Failed to open temp token file")?;
+            file.write_all(json.as_bytes())
+                .context("Failed to write temp token file")?;
+            file.sync_all().context("Failed to fsync temp token file")?;
         }
+
+        #[cfg(not(unix))]
+        {
+            fs::write(&tmp_path, &json).context("Failed to write temp token file")?;
+        }
+
+        fs::rename(&tmp_path, &self.file_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            anyhow::Error::new(e).context("Failed to atomically replace token file")
+        })?;
 
         Ok(())
     }
@@ -202,5 +234,64 @@ mod tests {
 
         assert!(!valid_token.is_expired());
         assert!(!valid_token.needs_refresh());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_creates_file_with_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let token_path = temp_dir.path().join("tokens.json");
+        let store = TokenStore::new(token_path.clone()).unwrap();
+
+        let token = OAuthToken {
+            provider_id: "p".to_string(),
+            access_token: "a".to_string(),
+            refresh_token: "r".to_string(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            enterprise_url: None,
+            project_id: None,
+        };
+        store.save(token).unwrap();
+
+        // Newly created token file must be owner read/write only (no group/other bits).
+        let mode = fs::metadata(&token_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_tightens_preexisting_world_readable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let token_path = temp_dir.path().join("tokens.json");
+
+        // Simulate a pre-existing world-readable token file.
+        fs::write(&token_path, "{}").unwrap();
+        let mut perms = fs::metadata(&token_path).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&token_path, perms).unwrap();
+        assert_eq!(
+            fs::metadata(&token_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+
+        let store = TokenStore::new(token_path.clone()).unwrap();
+        store
+            .save(OAuthToken {
+                provider_id: "p".to_string(),
+                access_token: "a".to_string(),
+                refresh_token: "r".to_string(),
+                expires_at: Utc::now() + chrono::Duration::hours(1),
+                enterprise_url: None,
+                project_id: None,
+            })
+            .unwrap();
+
+        // persist() must tighten the existing file down to 0600.
+        let mode = fs::metadata(&token_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

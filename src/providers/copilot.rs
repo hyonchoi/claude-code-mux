@@ -86,6 +86,28 @@ fn select_fallback_chat_model(models: &[CopilotModelInfo]) -> Option<&CopilotMod
         .or_else(|| models.iter().find(|m| m.capabilities_type() == "chat"))
 }
 
+/// Parse a Copilot `/models` response body and select the fallback chat model.
+/// Returns `ApiError` on malformed JSON or when no chat-capable model is present.
+fn parse_models_cache(body: &str) -> Result<CopilotModelCache, ProviderError> {
+    let payload: CopilotModelsResponse =
+        serde_json::from_str(body).map_err(|e| ProviderError::ApiError {
+            status: 500,
+            message: format!("Failed to parse Copilot /models response: {e}"),
+        })?;
+
+    let fallback =
+        select_fallback_chat_model(&payload.data).ok_or_else(|| ProviderError::ApiError {
+            status: 500,
+            message: "No chat fallback model found in Copilot /models response".to_string(),
+        })?;
+
+    Ok(CopilotModelCache {
+        fetched_at: Instant::now(),
+        fallback_model_id: fallback.id.clone(),
+        discovered_models: payload.data,
+    })
+}
+
 pub struct CopilotProvider {
     name: String,
     models: Arc<StdRwLock<Vec<String>>>,
@@ -174,21 +196,11 @@ impl CopilotProvider {
         }
 
         let body = response.text().await.map_err(ProviderError::HttpError)?;
-        let payload: CopilotModelsResponse =
-            serde_json::from_str(&body).map_err(|e| ProviderError::ApiError {
-                status: 500,
-                message: format!("Failed to parse Copilot /models response: {e}"),
-            })?;
+        let cache = parse_models_cache(&body)?;
 
-        let fallback =
-            select_fallback_chat_model(&payload.data).ok_or_else(|| ProviderError::ApiError {
-                status: 500,
-                message: "No chat fallback model found in Copilot /models response".to_string(),
-            })?;
-
-        let total_models = payload.data.len();
-        let chat_models = payload
-            .data
+        let total_models = cache.discovered_models.len();
+        let chat_models = cache
+            .discovered_models
             .iter()
             .filter(|m| m.capabilities_type() == "chat")
             .count();
@@ -196,15 +208,11 @@ impl CopilotProvider {
             session_id = %self.session_id,
             total_models,
             chat_models,
-            fallback_model = %fallback.id,
+            fallback_model = %cache.fallback_model_id,
             "Fetched Copilot /models and selected fallback model"
         );
 
-        Ok(CopilotModelCache {
-            fetched_at: Instant::now(),
-            fallback_model_id: fallback.id.clone(),
-            discovered_models: payload.data,
-        })
+        Ok(cache)
     }
 
     async fn update_discovered_chat_models(&self, discovered: &[CopilotModelInfo]) {
@@ -711,6 +719,49 @@ mod tests {
     fn test_select_fallback_returns_none_when_no_chat_models() {
         let models = vec![make_model("embed-v1", "embeddings", false, false)];
         assert!(select_fallback_chat_model(&models).is_none());
+    }
+
+    #[test]
+    fn test_parse_models_cache_selects_fallback_on_success() {
+        let body = r#"{"data":[
+            {"id":"gpt-4o","capabilities":{"type":"chat"},"is_chat_default":true},
+            {"id":"copilot-base","capabilities":{"type":"chat"},"is_chat_fallback":true},
+            {"id":"embed-v1","capabilities":{"type":"embeddings"}}
+        ]}"#;
+        let cache = parse_models_cache(body).expect("expected a parsed cache");
+        assert_eq!(cache.fallback_model_id, "copilot-base");
+        assert_eq!(cache.discovered_models.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_models_cache_errors_on_malformed_json() {
+        let err = parse_models_cache("{not json").expect_err("expected parse error");
+        match err {
+            ProviderError::ApiError { status, message } => {
+                assert_eq!(status, 500);
+                assert!(message.contains("Failed to parse Copilot /models response"));
+            }
+            other => panic!("expected ApiError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_models_cache_errors_when_no_chat_model() {
+        let body = r#"{"data":[{"id":"embed-v1","capabilities":{"type":"embeddings"}}]}"#;
+        let err = parse_models_cache(body).expect_err("expected no-chat-model error");
+        match err {
+            ProviderError::ApiError { status, message } => {
+                assert_eq!(status, 500);
+                assert!(message.contains("No chat fallback model found"));
+            }
+            other => panic!("expected ApiError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_models_cache_errors_on_empty_data() {
+        let err = parse_models_cache(r#"{"data":[]}"#).expect_err("expected no-chat-model error");
+        assert!(matches!(err, ProviderError::ApiError { status: 500, .. }));
     }
 
     #[tokio::test]

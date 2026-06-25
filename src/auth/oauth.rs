@@ -132,12 +132,27 @@ pub struct OAuthClient {
 }
 
 impl OAuthClient {
-    /// Create a new OAuth client
+    /// Create a new OAuth client with a default 30s-timeout HTTP client.
     pub fn new(config: OAuthConfig, token_store: TokenStore) -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self::with_client(config, token_store, http_client)
+    }
+
+    /// Create a new OAuth client using a caller-supplied HTTP client.
+    /// Lets callers inject a client with shared connection pooling and timeouts
+    /// (e.g. the background refresh loop's timeout-bearing client).
+    pub fn with_client(
+        config: OAuthConfig,
+        token_store: TokenStore,
+        http_client: reqwest::Client,
+    ) -> Self {
         Self {
             config,
             token_store,
-            http_client: reqwest::Client::new(),
+            http_client,
         }
     }
 

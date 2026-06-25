@@ -56,7 +56,7 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 - 🎯 **Unified API** - Full Anthropic Messages API compatibility
 
 ### 🚀 Advanced Features
-- 🔀 **Auto-mapping** - Regex-based model name transformation before routing (e.g., transform all `claude-*` to default model)
+- 🔀 **Auto-mapping** - Regex-based model name rewrite as a fallback step before the default route (e.g., transform all `claude-*` to the default model, except models you've explicitly defined)
 - 🎯 **Background Detection** - Configurable regex patterns for background task detection
 - 🤖 **Multi-Agent Support** - Dynamic model switching via `CCM-SUBAGENT-MODEL` tags
 - 📊 **Live Testing** - Built-in test interface to verify routing and responses
@@ -383,8 +383,8 @@ Configure routing rules (auto-saves on change!):
 Navigate to **Settings** tab for centralized regex management:
 
 - **Auto-mapping Pattern**: Regex to match models for transformation (e.g., `^claude-`)
-  - Matched models are transformed to the default model
-  - Then routing logic (WebSearch/Think/Background) is applied
+  - Evaluated only after WebSearch/Subagent/Think/Background routing; each of those short-circuits first
+  - A matched model is transformed to the default model, unless it's an explicitly defined model (`[[models]]`), which is left untouched
 
 - **Background Task Pattern**: Regex to detect background tasks (e.g., `(?i)claude.*haiku`)
   - Matches against the ORIGINAL model name (before auto-mapping)
@@ -406,16 +406,11 @@ Navigate to **Test** tab:
 
 ## Routing Logic
 
-**Flow**: Auto-map (transform) → WebSearch > Subagent > Think > Background > Default
+**Flow** (first match wins): WebSearch > Subagent > Think > Background > Auto-map (transform) > Default
 
-### 0. Auto-mapping (Model Name Transformation)
-- **Trigger**: Model name matches `auto_map_regex` pattern
-- **Example**: Request with `model="claude-4-5-sonnet"` and regex `^claude-`
-- **Action**: Transform `claude-4-5-sonnet` → `minimax-m2` (default model)
-- **Then**: Continue to routing logic below
-- **Configuration**: Set in Router or Settings tab
+> For the complete pipeline, model resolution, and worked examples, see the [Routing reference](docs/reference/routing.md). For why the order is what it is, see [Why routing works this way](docs/explanation/routing-design.md).
 
-> **Key Point**: Auto-mapping is NOT a routing decision - it transforms the model name BEFORE routing logic is applied.
+> **Key Point**: WebSearch, Subagent, Think, and Background are checked first, and each one short-circuits routing. Auto-mapping is NOT a routing decision — it only rewrites the model name as the last step before the default fallback, and only if none of the higher-priority routes matched. Explicitly defined models (`[[models]]`) are exempt from the rewrite.
 
 ### 1. WebSearch (Highest Priority)
 - **Trigger**: Request contains `web_search` tool in tools array
@@ -425,7 +420,7 @@ Navigate to **Test** tab:
 ### 2. Subagent Model
 - **Trigger**: System prompt contains `<CCM-SUBAGENT-MODEL>model-name</CCM-SUBAGENT-MODEL>` tag
 - **Example**: AI agent specifying model for sub-task
-- **Routes to**: `router.subagent` model if configured (overrides the tag) — otherwise falls through with the tag's model name so think/background/default routing applies. Tag is always removed from the prompt.
+- **Routes to**: `router.subagent` model if configured (overrides the tag) — otherwise falls through with the tag's model name so think/background/auto-map/default routing applies. Tag is always removed from the prompt.
 
 ### 3. Think Mode
 - **Trigger**: Request has `thinking` field with `type: "enabled"`
@@ -441,9 +436,16 @@ Navigate to **Test** tab:
 
 > **Important**: Background detection uses the ORIGINAL model name, not the auto-mapped one.
 
-### 5. Default (Fallback)
-- **Trigger**: No routing conditions matched
-- **Routes to**: Transformed model name (if auto-mapped) or original model name
+### 5. Auto-mapping (Model Name Transformation)
+- **Trigger**: None of the higher-priority routes matched AND the model name matches `auto_map_regex`
+- **Example**: Request with `model="claude-4-5-sonnet"` and regex `^claude-`
+- **Action**: Transform `claude-4-5-sonnet` → `minimax-m2` (default model), then fall through to Default
+- **Exception**: If the requested model is itself an explicitly defined model (its `name` appears in a `[[models]]` block), the rewrite is **skipped** so the model keeps its own name and resolves to its own provider mappings. This lets you define a `claude-*` model and route it where you want even when `auto_map_regex = "^claude-"` is set.
+- **Configuration**: Set in Router or Settings tab
+
+### 6. Default (Fallback)
+- **Trigger**: No higher-priority route matched
+- **Routes to**: Auto-mapped model name (if rewritten) or the original/defined model name, resolved through its provider mappings
 
 ## Routing Examples
 
@@ -453,9 +455,8 @@ Request: model="claude-4-5-haiku", tools=[web_search]
 Config: auto_map_regex="^claude-", background_regex="(?i)claude.*haiku", websearch="glm-4.6"
 
 Flow:
-1. Auto-map: "claude-4-5-haiku" → "minimax-m2" (transformed)
-2. WebSearch check: tools has web_search → Route to "glm-4.6"
-Result: glm-4.6 (websearch model)
+1. WebSearch check: tools has web_search → Route to "glm-4.6"
+Result: glm-4.6 (websearch model — short-circuits before auto-map)
 ```
 
 ### Example 2: Claude Haiku (No Special Conditions)
@@ -464,11 +465,11 @@ Request: model="claude-4-5-haiku"
 Config: auto_map_regex="^claude-", background_regex="(?i)claude.*haiku", background="glm-4.5-air"
 
 Flow:
-1. Auto-map: "claude-4-5-haiku" → "minimax-m2" (transformed)
-2. WebSearch check: No web_search tool
+1. WebSearch check: No web_search tool
+2. Subagent check: No CCM-SUBAGENT-MODEL tag
 3. Think check: No thinking field
 4. Background check on ORIGINAL: "claude-4-5-haiku" matches "(?i)claude.*haiku" → Route to "glm-4.5-air"
-Result: glm-4.5-air (background model)
+Result: glm-4.5-air (background model — short-circuits before auto-map)
 ```
 
 ### Example 3: Claude Sonnet with Think Mode
@@ -477,10 +478,10 @@ Request: model="claude-4-5-sonnet", thinking={type:"enabled"}
 Config: auto_map_regex="^claude-", think="kimi-k2-thinking"
 
 Flow:
-1. Auto-map: "claude-3-5-sonnet" → "minimax-m2" (transformed)
-2. WebSearch check: No web_search tool
+1. WebSearch check: No web_search tool
+2. Subagent check: No CCM-SUBAGENT-MODEL tag
 3. Think check: thinking.type="enabled" → Route to "kimi-k2-thinking"
-Result: kimi-k2-thinking (think model)
+Result: kimi-k2-thinking (think model — short-circuits before auto-map)
 ```
 
 ### Example 4: Non-Claude Model (No Auto-mapping)
@@ -489,11 +490,12 @@ Request: model="glm-4.6"
 Config: auto_map_regex="^claude-", default="minimax-m2"
 
 Flow:
-1. Auto-map: "glm-4.6" doesn't match "^claude-" → No transformation
-2. WebSearch check: No web_search tool
+1. WebSearch check: No web_search tool
+2. Subagent check: No CCM-SUBAGENT-MODEL tag
 3. Think check: No thinking field
 4. Background check: "glm-4.6" doesn't match background regex
-5. Default: Use model name as-is
+5. Auto-map: "glm-4.6" doesn't match "^claude-" → No transformation
+6. Default: Use model name as-is
 Result: glm-4.6 (original model name, routed through model mappings)
 ```
 
@@ -735,12 +737,11 @@ See `docs/OAUTH_TESTING.md` for detailed API documentation.
 
 ### Auto-mapping with Regex
 
-Automatically transform model names before routing logic is applied:
+Rewrite model names to your default model as the last step before the default fallback (WebSearch/Subagent/Think/Background routing is checked first and short-circuits):
 
 1. Navigate to **Router** or **Settings** tab
 2. Set **Auto-map Regex Pattern**: `^claude-`
-3. All requests for `claude-*` models will be transformed to your default model
-4. Then routing logic (WebSearch/Think/Background) is applied to the transformed request
+3. Any `claude-*` request that wasn't already routed by WebSearch/Subagent/Think/Background is transformed to your default model — **except** a model you've explicitly defined in a `[[models]]` block, which keeps its own name and provider mappings
 
 **Use Cases**:
 - Transform all Claude models to cost-optimized alternative: `^claude-`
@@ -753,8 +754,7 @@ Config: auto_map_regex="^claude-", default="minimax-m2", websearch="glm-4.6"
 Request: model="claude-sonnet", tools=[web_search]
 
 Flow:
-1. Transform: "claude-sonnet" → "minimax-m2"
-2. Route: WebSearch detected → "glm-4.6"
+1. WebSearch detected → Route to "glm-4.6" (short-circuits before auto-map)
 Result: glm-4.6 model
 ```
 
@@ -1104,7 +1104,8 @@ Check the routing order:
 2. **Subagent** - if system prompt contains `<CCM-SUBAGENT-MODEL>` tag
 3. **Think Mode** - if request has `thinking` field
 4. **Background** - if ORIGINAL model name matches background regex
-5. **Default** - fallback
+5. **Auto-mapping** - if model matches `auto_map_regex` and isn't an explicitly defined model, rewrite to default
+6. **Default** - fallback
 
 Enable debug logging with `RUST_LOG=debug ccm start` to see routing decisions.
 </details>
@@ -1169,19 +1170,36 @@ If `zai` fails → automatically falls back to `openrouter`. **No manual interve
 
 ## Documentation
 
+Full docs live in **[docs/](docs/README.md)**, organized by the [Diataxis](https://diataxis.fr/) framework.
+
+**New here?** Start with the [Getting Started tutorial](docs/tutorials/getting-started.md) - zero to your first routed request.
+
+**Reference (look up exact details):**
+- [Configuration reference](docs/reference/configuration.md) - every TOML table and field, with types and defaults
+- [Routing reference](docs/reference/routing.md) - the priority pipeline, auto-map, and model resolution
+- [Provider reference](docs/reference/providers.md) - every `provider_type`, its upstream format, and auth modes
+- [CLI reference](docs/reference/cli.md) - `ccm` subcommands, flags, and environment variables
+- [HTTP API reference](docs/reference/http-api.md) - the `/v1/*` inference and `/api/*` admin endpoints
+
+**Explanation (understand the design):**
+- [Architecture](docs/explanation/architecture.md) - request lifecycle and the provider-adapter abstraction
+- [Why routing works this way](docs/explanation/routing-design.md) - why auto-map runs last
+- [Provider fallback and cooldowns](docs/explanation/provider-fallback.md) - failover and the streaming boundary
+
+**Guides and provider setup:**
+- [OAuth Setup](docs/OAUTH_SETUP.md) - End-to-end OAuth configuration guide
+- [OAuth Testing](docs/OAUTH_TESTING.md) - Manual verification flows for OAuth providers
+- [Gemini Integration](docs/gemini-integration.md) - Gemini provider setup and integration notes
+
+**Admin UI internals and contributing:**
 - [Design Principles](docs/design-principles.md) - Claude Code Mux design philosophy and UX guidelines
 - [URL-based State Management](docs/url-state-management.md) - Admin UI URL-based state management pattern
 - [LocalStorage-based State Management](docs/localstorage-state-management.md) - Admin UI localStorage-based client state management
-- [Gemini Integration](docs/gemini-integration.md) - Gemini provider setup and integration notes
-- [OAuth Setup](docs/OAUTH_SETUP.md) - End-to-end OAuth configuration guide
-- [OAuth Testing](docs/OAUTH_TESTING.md) - Manual verification flows for OAuth providers
 - [Screenshot Guide](docs/SCREENSHOT_GUIDE.md) - How to capture and maintain documentation screenshots
 - [Operational Contracts](docs/contracts/) - Rollback, SLO, fallback selection, auth validation, and operational specs
 - [Contributing Guide](CONTRIBUTING.md) - Development workflow, coding standards, and test expectations
 - [Agent Instructions](AGENTS.md) - Project-level AI agent workflow and conventions
 - [Project TODOs](TODOS.md) - Prioritized backlog and follow-up engineering work
-- [OAuth Implementation Notes](OAUTH_IMPLEMENTATION_COMPLETE.md) - OAuth implementation completion details
-- [OAuth Summary](oauth_summary.md) - High-level OAuth rollout summary
 
 ## Changelog
 

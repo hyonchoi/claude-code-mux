@@ -137,12 +137,21 @@ impl Router {
             }
         }
 
-        // 5. Auto-mapping (model name transformation FIRST)
+        // 5. Auto-mapping (model name transformation FIRST).
+        // An explicitly defined model (config.models[].name) bypasses the
+        // rewrite so it resolves to its own provider mappings.
         if let Some(ref regex) = self.auto_map_regex {
             if regex.is_match(&request.model) {
-                let old = request.model.clone();
-                request.model = self.config.router.default.clone();
-                debug!("🔀 Auto-mapped model '{}' → '{}'", old, request.model);
+                if self.is_defined_model(&request.model) {
+                    debug!(
+                        "⏭️  Skipping auto-map: '{}' is an explicitly defined model",
+                        request.model
+                    );
+                } else {
+                    let old = request.model.clone();
+                    request.model = self.config.router.default.clone();
+                    debug!("🔀 Auto-mapped model '{}' → '{}'", old, request.model);
+                }
             }
         }
 
@@ -176,6 +185,11 @@ impl Router {
             .as_ref()
             .map(|t| t.r#type == "enabled")
             .unwrap_or(false)
+    }
+
+    /// True if `model` is an explicitly defined model in config.models.
+    fn is_defined_model(&self, model: &str) -> bool {
+        self.config.models.iter().any(|m| m.name == model)
     }
 
     /// Detect background tasks using regex pattern
@@ -413,6 +427,42 @@ mod tests {
         let decision = router.route(&mut request).unwrap();
         assert_eq!(decision.route_type, RouteType::Default);
         assert_eq!(decision.model_name, "glm-4.6"); // Uses original model name (no auto-mapping)
+    }
+
+    #[test]
+    fn test_defined_model_skips_auto_map() {
+        let mut config = create_test_config();
+        config.router.background = None; // isolate step 5 from background routing
+        config.models = vec![crate::cli::ModelConfig {
+            name: "claude-haiku-4-5".to_string(),
+            mappings: vec![],
+        }];
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Hello");
+        request.model = "claude-haiku-4-5".to_string();
+
+        let decision = router.route(&mut request).unwrap();
+        assert_eq!(decision.route_type, RouteType::Default);
+        assert_eq!(decision.model_name, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn test_undefined_claude_model_still_auto_maps() {
+        // Regression guard: a claude-* model NOT in config.models still maps to default.
+        let mut config = create_test_config();
+        config.models = vec![crate::cli::ModelConfig {
+            name: "claude-haiku-4-5".to_string(),
+            mappings: vec![],
+        }];
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Hello");
+        request.model = "claude-3-5-sonnet-20241022".to_string(); // not in config.models
+
+        let decision = router.route(&mut request).unwrap();
+        assert_eq!(decision.route_type, RouteType::Default);
+        assert_eq!(decision.model_name, "default.model"); // still auto-mapped
     }
 
     #[test]
