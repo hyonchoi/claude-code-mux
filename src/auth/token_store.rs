@@ -132,15 +132,32 @@ impl TokenStore {
         let tokens = self.tokens.read().unwrap();
         let json = serde_json::to_string_pretty(&*tokens).context("Failed to serialize tokens")?;
 
-        fs::write(&self.file_path, json).context("Failed to write token file")?;
-
-        // Set file permissions to 0600 (owner read/write only)
+        // On Unix, create the file with 0600 from the start so there is no window
+        // where the token file is world-readable (fs::write would create at the
+        // process umask, typically 0644, before any later chmod).
         #[cfg(unix)]
         {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&self.file_path)
+                .context("Failed to open token file")?;
+            // Tighten perms on a pre-existing file too (mode() only applies on create).
+            let mut perms = file.metadata()?.permissions();
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&self.file_path)?.permissions();
             perms.set_mode(0o600);
-            fs::set_permissions(&self.file_path, perms)?;
+            file.set_permissions(perms)?;
+            file.write_all(json.as_bytes())
+                .context("Failed to write token file")?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            fs::write(&self.file_path, json).context("Failed to write token file")?;
         }
 
         Ok(())

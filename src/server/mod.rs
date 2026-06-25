@@ -871,21 +871,32 @@ done
             port
         );
 
-        let script_path = "/tmp/ccm_restart.sh";
-        fs::write(script_path, script_content)?;
+        // Write the script into the user-owned config dir, not a world-writable
+        // /tmp path. A fixed /tmp/ccm_restart.sh lets any other local user
+        // symlink or race-replace the script that we then execute as ourselves.
+        let dir = dirs::home_dir()
+            .map(|h| h.join(".claude-code-mux"))
+            .unwrap_or_else(std::env::temp_dir);
+        fs::create_dir_all(&dir)?;
+        let script_path = dir.join("restart.sh");
 
-        // Make executable
-        #[cfg(unix)]
+        // Create with 0700 (owner-only) from the start; executed via `sh <path>`
+        // so no execute bit is required.
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(script_path)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(script_path, perms)?;
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o700)
+                .open(&script_path)?;
+            file.write_all(script_content.as_bytes())?;
         }
 
         // Execute script in background
         Command::new("sh")
-            .arg(script_path)
+            .arg(&script_path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
