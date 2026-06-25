@@ -86,6 +86,28 @@ fn select_fallback_chat_model(models: &[CopilotModelInfo]) -> Option<&CopilotMod
         .or_else(|| models.iter().find(|m| m.capabilities_type() == "chat"))
 }
 
+/// Parse a Copilot `/models` response body and select the fallback chat model.
+/// Returns `ApiError` on malformed JSON or when no chat-capable model is present.
+fn parse_models_cache(body: &str) -> Result<CopilotModelCache, ProviderError> {
+    let payload: CopilotModelsResponse =
+        serde_json::from_str(body).map_err(|e| ProviderError::ApiError {
+            status: 500,
+            message: format!("Failed to parse Copilot /models response: {e}"),
+        })?;
+
+    let fallback =
+        select_fallback_chat_model(&payload.data).ok_or_else(|| ProviderError::ApiError {
+            status: 500,
+            message: "No chat fallback model found in Copilot /models response".to_string(),
+        })?;
+
+    Ok(CopilotModelCache {
+        fetched_at: Instant::now(),
+        fallback_model_id: fallback.id.clone(),
+        discovered_models: payload.data,
+    })
+}
+
 pub struct CopilotProvider {
     name: String,
     models: Arc<StdRwLock<Vec<String>>>,
@@ -174,21 +196,11 @@ impl CopilotProvider {
         }
 
         let body = response.text().await.map_err(ProviderError::HttpError)?;
-        let payload: CopilotModelsResponse =
-            serde_json::from_str(&body).map_err(|e| ProviderError::ApiError {
-                status: 500,
-                message: format!("Failed to parse Copilot /models response: {e}"),
-            })?;
+        let cache = parse_models_cache(&body)?;
 
-        let fallback =
-            select_fallback_chat_model(&payload.data).ok_or_else(|| ProviderError::ApiError {
-                status: 500,
-                message: "No chat fallback model found in Copilot /models response".to_string(),
-            })?;
-
-        let total_models = payload.data.len();
-        let chat_models = payload
-            .data
+        let total_models = cache.discovered_models.len();
+        let chat_models = cache
+            .discovered_models
             .iter()
             .filter(|m| m.capabilities_type() == "chat")
             .count();
@@ -196,15 +208,11 @@ impl CopilotProvider {
             session_id = %self.session_id,
             total_models,
             chat_models,
-            fallback_model = %fallback.id,
+            fallback_model = %cache.fallback_model_id,
             "Fetched Copilot /models and selected fallback model"
         );
 
-        Ok(CopilotModelCache {
-            fetched_at: Instant::now(),
-            fallback_model_id: fallback.id.clone(),
-            discovered_models: payload.data,
-        })
+        Ok(cache)
     }
 
     async fn update_discovered_chat_models(&self, discovered: &[CopilotModelInfo]) {
@@ -215,7 +223,10 @@ impl CopilotProvider {
                 poisoned.into_inner()
             }
         };
-        for model in discovered.iter().filter(|m| m.capabilities_type() == "chat") {
+        for model in discovered
+            .iter()
+            .filter(|m| m.capabilities_type() == "chat")
+        {
             if !models.iter().any(|existing| existing == &model.id) {
                 models.push(model.id.clone());
             }
@@ -275,7 +286,10 @@ impl CopilotProvider {
         self.resolve_auto_model_from_cache_or_fetch(None).await
     }
 
-    async fn resolve_request_model(&self, request: &mut AnthropicRequest) -> Result<(), ProviderError> {
+    async fn resolve_request_model(
+        &self,
+        request: &mut AnthropicRequest,
+    ) -> Result<(), ProviderError> {
         if request.model == "auto" {
             let resolved_model = self.resolve_auto_model().await?;
             tracing::debug!(
@@ -388,9 +402,12 @@ impl CopilotProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     // Clone already has all headers from the original builder.
                     // Only regenerate X-Request-Id to avoid duplicate headers.
-                    let retry_builder = retry_builder
-                        .header("X-Request-Id", Uuid::new_v4().to_string());
-                    retry_builder.send().await.map_err(ProviderError::HttpError)?
+                    let retry_builder =
+                        retry_builder.header("X-Request-Id", Uuid::new_v4().to_string());
+                    retry_builder
+                        .send()
+                        .await
+                        .map_err(ProviderError::HttpError)?
                 } else {
                     return Err(ProviderError::HttpError(e));
                 }
@@ -507,9 +524,12 @@ impl AnthropicProvider for CopilotProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     // Clone already has all headers from the original builder.
                     // Only regenerate X-Request-Id to avoid duplicate headers.
-                    let retry_builder = retry_builder
-                        .header("X-Request-Id", Uuid::new_v4().to_string());
-                    retry_builder.send().await.map_err(ProviderError::HttpError)?
+                    let retry_builder =
+                        retry_builder.header("X-Request-Id", Uuid::new_v4().to_string());
+                    retry_builder
+                        .send()
+                        .await
+                        .map_err(ProviderError::HttpError)?
                 } else {
                     return Err(ProviderError::HttpError(e));
                 }
@@ -643,7 +663,9 @@ impl AnthropicProvider for CopilotProvider {
         match self.models.read() {
             Ok(models) => models.iter().any(|m| m == model),
             Err(poisoned) => {
-                tracing::warn!("Copilot models lock poisoned during read; continuing with recovered state");
+                tracing::warn!(
+                    "Copilot models lock poisoned during read; continuing with recovered state"
+                );
                 poisoned.into_inner().iter().any(|m| m == model)
             }
         }
@@ -697,6 +719,49 @@ mod tests {
     fn test_select_fallback_returns_none_when_no_chat_models() {
         let models = vec![make_model("embed-v1", "embeddings", false, false)];
         assert!(select_fallback_chat_model(&models).is_none());
+    }
+
+    #[test]
+    fn test_parse_models_cache_selects_fallback_on_success() {
+        let body = r#"{"data":[
+            {"id":"gpt-4o","capabilities":{"type":"chat"},"is_chat_default":true},
+            {"id":"copilot-base","capabilities":{"type":"chat"},"is_chat_fallback":true},
+            {"id":"embed-v1","capabilities":{"type":"embeddings"}}
+        ]}"#;
+        let cache = parse_models_cache(body).expect("expected a parsed cache");
+        assert_eq!(cache.fallback_model_id, "copilot-base");
+        assert_eq!(cache.discovered_models.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_models_cache_errors_on_malformed_json() {
+        let err = parse_models_cache("{not json").expect_err("expected parse error");
+        match err {
+            ProviderError::ApiError { status, message } => {
+                assert_eq!(status, 500);
+                assert!(message.contains("Failed to parse Copilot /models response"));
+            }
+            other => panic!("expected ApiError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_models_cache_errors_when_no_chat_model() {
+        let body = r#"{"data":[{"id":"embed-v1","capabilities":{"type":"embeddings"}}]}"#;
+        let err = parse_models_cache(body).expect_err("expected no-chat-model error");
+        match err {
+            ProviderError::ApiError { status, message } => {
+                assert_eq!(status, 500);
+                assert!(message.contains("No chat fallback model found"));
+            }
+            other => panic!("expected ApiError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_models_cache_errors_on_empty_data() {
+        let err = parse_models_cache(r#"{"data":[]}"#).expect_err("expected no-chat-model error");
+        assert!(matches!(err, ProviderError::ApiError { status: 500, .. }));
     }
 
     #[tokio::test]
@@ -798,7 +863,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_discovered_chat_models_populates_supports_model() {
-        let provider = CopilotProvider::new("copilot".to_string(), vec!["seed-model".to_string()], None);
+        let provider =
+            CopilotProvider::new("copilot".to_string(), vec!["seed-model".to_string()], None);
 
         provider
             .update_discovered_chat_models(&[
@@ -826,7 +892,8 @@ mod tests {
 
     #[test]
     fn test_supports_model_waits_for_write_lock_instead_of_false_negative() {
-        let provider = CopilotProvider::new("copilot".to_string(), vec!["gpt-4o".to_string()], None);
+        let provider =
+            CopilotProvider::new("copilot".to_string(), vec!["gpt-4o".to_string()], None);
         let models = provider.models.clone();
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -849,12 +916,8 @@ mod tests {
             .timeout(std::time::Duration::from_millis(1))
             .build()
             .unwrap();
-        let provider = CopilotProvider::new_with_client(
-            "test".to_string(),
-            vec![],
-            None,
-            custom_client,
-        );
+        let provider =
+            CopilotProvider::new_with_client("test".to_string(), vec![], None, custom_client);
         // The client is stored — just verify construction succeeds.
         assert!(provider.session_id.len() == 36); // UUID v4 format
     }
@@ -873,11 +936,7 @@ mod tests {
         ];
         let actual_keys: Vec<&str> = COPILOT_HEADERS.iter().map(|(k, _)| *k).collect();
         for key in &expected_keys {
-            assert!(
-                actual_keys.contains(key),
-                "Missing header key: {}",
-                key
-            );
+            assert!(actual_keys.contains(key), "Missing header key: {}", key);
         }
         assert_eq!(COPILOT_HEADERS.len(), 8);
     }
@@ -894,9 +953,22 @@ mod tests {
         // Verify VScode-SessionId is the same in both requests
         let req1 = _b1.build().unwrap();
         let req2 = _b2.build().unwrap();
-        let sid1 = req1.headers().get("VScode-SessionId").unwrap().to_str().unwrap();
-        let sid2 = req2.headers().get("VScode-SessionId").unwrap().to_str().unwrap();
-        assert_eq!(sid1, sid2, "VScode-SessionId must be stable across apply_copilot_headers calls");
+        let sid1 = req1
+            .headers()
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let sid2 = req2
+            .headers()
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            sid1, sid2,
+            "VScode-SessionId must be stable across apply_copilot_headers calls"
+        );
         assert_eq!(sid1, provider.session_id.as_str());
     }
 
@@ -914,8 +986,17 @@ mod tests {
         let request = apply_copilot_headers(builder, &p1.session_id, &p1.machine_id)
             .build()
             .unwrap();
-        let req_id = request.headers().get("X-Request-Id").unwrap().to_str().unwrap();
-        assert_eq!(req_id.len(), 36, "X-Request-Id should be UUID v4 (36 chars)");
+        let req_id = request
+            .headers()
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            req_id.len(),
+            36,
+            "X-Request-Id should be UUID v4 (36 chars)"
+        );
     }
 
     #[tokio::test]
@@ -977,9 +1058,24 @@ mod tests {
         .build()
         .unwrap();
 
-        let id1 = b1.headers().get("X-Request-Id").unwrap().to_str().unwrap().to_string();
-        let id2 = b2.headers().get("X-Request-Id").unwrap().to_str().unwrap().to_string();
-        assert_ne!(id1, id2, "X-Request-Id must be different on every apply_copilot_headers call");
+        let id1 = b1
+            .headers()
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let id2 = b2
+            .headers()
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(
+            id1, id2,
+            "X-Request-Id must be different on every apply_copilot_headers call"
+        );
         assert_eq!(id1.len(), 36);
         assert_eq!(id2.len(), 36);
     }
@@ -1021,19 +1117,49 @@ mod tests {
         }
 
         // VScode-SessionId is stable across calls
-        let sid1 = headers1.get("VScode-SessionId").unwrap().to_str().unwrap().to_string();
-        let sid2 = headers2.get("VScode-SessionId").unwrap().to_str().unwrap().to_string();
+        let sid1 = headers1
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let sid2 = headers2
+            .get("VScode-SessionId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_eq!(sid1, sid2, "VScode-SessionId must be stable");
         assert_eq!(sid1, provider.session_id);
 
         // VScode-MachineId is stable across calls
-        let mid1 = headers1.get("VScode-MachineId").unwrap().to_str().unwrap().to_string();
-        let mid2 = headers2.get("VScode-MachineId").unwrap().to_str().unwrap().to_string();
+        let mid1 = headers1
+            .get("VScode-MachineId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let mid2 = headers2
+            .get("VScode-MachineId")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_eq!(mid1, mid2, "VScode-MachineId must be stable");
 
         // X-Request-Id is unique per call
-        let rid1 = headers1.get("X-Request-Id").unwrap().to_str().unwrap().to_string();
-        let rid2 = headers2.get("X-Request-Id").unwrap().to_str().unwrap().to_string();
+        let rid1 = headers1
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let rid2 = headers2
+            .get("X-Request-Id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_ne!(rid1, rid2, "X-Request-Id must differ on each call");
         assert_eq!(rid1.len(), 36);
     }
