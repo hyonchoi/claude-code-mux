@@ -1367,7 +1367,7 @@ impl AnthropicProvider for OpenAIProvider {
             headers_authorization = "Bearer ***",
             headers_content_type = "application/json",
             headers_accept = "text/event-stream",
-            headers_custom = ?self.custom_headers,
+            headers_custom_keys = ?self.custom_headers.iter().map(|(k, _)| k).collect::<Vec<_>>(),
             "OpenAI request headers (streaming)"
         );
 
