@@ -1116,6 +1116,17 @@ impl AnthropicProvider for OpenAIProvider {
                 req_builder = req_builder.header(key, value);
             }
 
+            tracing::trace!(
+                provider = %self.name,
+                url = %url,
+                method = "POST",
+                headers_authorization = "Bearer ***",
+                headers_content_type = "application/json",
+                headers_accept = "text/event-stream",
+                headers_custom_keys = ?self.custom_headers.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+                "OpenAI request headers (Responses API)"
+            );
+
             let response = req_builder.json(&responses_request).send().await?;
 
             if !response.status().is_success() {
@@ -1187,6 +1198,16 @@ impl AnthropicProvider for OpenAIProvider {
             for (key, value) in &self.custom_headers {
                 req_builder = req_builder.header(key, value);
             }
+
+            tracing::trace!(
+                provider = %self.name,
+                url = %url,
+                method = "POST",
+                headers_authorization = "Bearer ***",
+                headers_content_type = "application/json",
+                headers_custom_keys = ?self.custom_headers.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+                "OpenAI request headers (Chat Completions)"
+            );
 
             let response = req_builder.json(&openai_request).send().await?;
 
@@ -1336,6 +1357,19 @@ impl AnthropicProvider for OpenAIProvider {
                 tracing::debug!("🔐 Using OAuth Bearer token for streaming on {}", self.name);
             }
         }
+
+        tracing::trace!(
+            provider = %self.name,
+            url = %url,
+            method = "POST",
+            is_codex = is_codex,
+            is_oauth = self.is_oauth(),
+            headers_authorization = "Bearer ***",
+            headers_content_type = "application/json",
+            headers_accept = "text/event-stream",
+            headers_custom = ?self.custom_headers,
+            "OpenAI request headers (streaming)"
+        );
 
         let response = req_builder.json(&request_body).send().await?;
 
