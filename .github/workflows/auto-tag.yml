@@ -22,6 +22,11 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          # Use a PAT (not the default GITHUB_TOKEN) so the tag push below
+          # is attributed to a real token and triggers the Release workflow.
+          # Pushes made with GITHUB_TOKEN do NOT fire `on: push: tags` runs.
+          # RELEASE_PAT: fine-grained PAT with `contents: write` on this repo.
+          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Get version from Cargo.toml
         id: version
