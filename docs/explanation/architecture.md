@@ -76,7 +76,17 @@ The trade-off is clear. Adding a new upstream type means writing or extending an
 
 ## Background OAuth refresh
 
-Some OAuth providers can be configured but idle, serving no traffic. Their tokens would expire quietly and force a full re-login the next time you need them. To avoid that, the server runs a background loop. It polls every 20 minutes and refreshes any token whose remaining life is under 25 minutes. The loop uses one HTTP client with a 30s timeout (injected into the refresh path) so a hung provider cannot stall the whole refresh. Tokens live in `~/.claude-code-mux/oauth_tokens.json` with `0600` permissions.
+Some OAuth providers can be configured but idle, serving no traffic. Their tokens would expire quietly and force a full re-login the next time you need them. To avoid that, the server runs a background loop. It polls every 20 minutes and refreshes any token whose remaining life is under 25 minutes. The loop uses one HTTP client with a 30s timeout (injected into the refresh path) so a hung provider cannot stall the whole refresh. Tokens live in `~/.claude-code-mux/oauth_tokens.json` with `0600` permissions. Writes are atomic: the store writes to a sibling temp file created `0600` from the start, `fsync`s it, then renames it over the target, so a crash mid-write can never truncate or lose the existing tokens.
+
+## Security model
+
+`ccm` splits its routes into a **control plane** (`/api/*` and the admin UI) and a **data plane** (`/v1/*`), and defends them differently because they have different threat models.
+
+The control plane can rewrite config, run OAuth flows, and restart the process, so it is the sensitive surface. When no `api_key` is configured it has no per-request auth and leans entirely on the loopback bind. To keep that assumption from silently breaking, the server has a bind-time gate and a request-time gate that share one predicate (`control_plane_requires_loopback` in `src/server`): bind-time, it refuses to start if `host` is non-loopback and no `api_key` is set; request-time, a CSRF guard rejects any control-plane request whose `Host` header is not a loopback authority. The shared predicate means the two gates cannot drift out of agreement.
+
+The data plane authenticates with the `api_key` header, so it is not a CSRF target and gets no Origin check. But when no `api_key` is set those routes are open, so a separate `data_plane_rebinding_guard` applies the same loopback-`Host` requirement to `/v1/*`. Without it, a DNS-rebinding page could point an attacker hostname at `127.0.0.1` and drive `/v1/*` to spend tokens and read model output. When an `api_key` IS set, the key is the gate and the guard is a no-op.
+
+One more sharp edge: an empty-string `api_key` (often from an unset environment variable) is `Some("")`, which would pass a naive "is a key set?" check while failing every `is_none()` gate above. The config loader normalizes a blank or whitespace-only `api_key` to `None` before any gate reads it, so all three gates agree and fail closed (loopback-only).
 
 ## Trade-offs
 

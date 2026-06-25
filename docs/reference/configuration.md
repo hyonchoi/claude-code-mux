@@ -9,8 +9,8 @@ All fields are optional.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `port` | u16 | `13456` | TCP port the proxy listens on. The generated default config and all examples use `13456`. (The code default is `3456` and applies only if you delete the field.) |
-| `host` | String | `"127.0.0.1"` | Address the proxy binds to. |
-| `api_key` | String | unset | If set, every protected request (the `/v1/*` and `/api/*` routes) must send this key. If unset, no auth is required. See below. |
+| `host` | String | `"127.0.0.1"` | Address the proxy binds to. With no `api_key` set, `ccm` refuses to bind to a non-loopback address and exits with an error — see [Security](#security-binding-and-api_key). |
+| `api_key` | String | unset | If set, every protected request (the `/v1/*` and `/api/*` routes) must send this key. If unset, the proxy stays loopback-only (it binds only to `127.0.0.1`/`::1` and rejects requests whose `Host` header is not a loopback authority). A blank or whitespace-only value is treated as unset. See [Security](#security-binding-and-api_key). |
 | `log_level` | String | `"info"` | Log verbosity for the server. |
 
 When `api_key` is set, a client presents it with either header:
@@ -21,6 +21,15 @@ Authorization: Bearer your-secret-key
 ```
 
 The comparison runs in constant time. The value supports environment variable substitution (a value starting with `$`).
+
+### Security: binding and api_key
+
+`ccm` separates two route groups and protects them differently:
+
+- **Control plane** (`/api/*`, the admin UI) is the sensitive surface: it can rewrite config, drive OAuth, and restart the process. With no `api_key` it has no per-request auth, so it relies on the loopback bind. To keep that guarantee honest, `ccm` **refuses to start** (exits with an error) when `host` is a non-loopback address and `api_key` is unset. Set an `api_key` before binding to `0.0.0.0` or a LAN address.
+- **Data plane** (`/v1/*`) authenticates with the `api_key` header. When no `api_key` is set, those routes are open, so `ccm` applies a DNS-rebinding guard: it serves them only when the request `Host` header is a loopback authority. This stops a malicious web page from rebinding an attacker hostname to `127.0.0.1` and driving `/v1/*` to spend your tokens. When an `api_key` IS set, the key is the gate and non-loopback `Host` values are allowed.
+
+A blank or whitespace-only `api_key` (including one resolved from an empty environment variable) is normalized to **unset** before any of these gates run, so an empty key never silently disables auth while passing the "key is set" check. `ccm` logs a warning when it does this.
 
 ## [server.timeouts]
 

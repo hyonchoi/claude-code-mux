@@ -7,7 +7,7 @@ A second small server listens on port `1455` only to catch the OpenAI Codex OAut
 The API has two route groups:
 
 - **Public routes** need no API key.
-- **Protected routes** need `server.api_key`, but only if you configured one. If `server.api_key` is unset, every route is open.
+- **Protected routes** need `server.api_key`, but only if you configured one. If `server.api_key` is unset, the proxy stays loopback-only: it binds only to `127.0.0.1`/`::1` (and refuses to start on a non-loopback address without a key), and it rejects any request whose `Host` header is not a loopback authority. So "no key" means "open from this machine," not "open to the network." A blank or whitespace-only `server.api_key` is treated as unset.
 
 ## Authentication
 
@@ -23,7 +23,7 @@ curl http://localhost:13456/v1/messages \
   -d '{ ... }'
 ```
 
-If `server.api_key` is not set, you can omit these headers.
+If `server.api_key` is not set, you can omit these headers, but the request must reach the proxy over loopback. When no key is configured, both the inference (`/v1/*`) and admin (`/api/*`) routes answer only requests whose `Host` header is a loopback authority (`localhost`, `127.0.0.0/8`, `::1`); anything else gets a 403. This DNS-rebinding guard keeps a browser page from rebinding an attacker hostname to `127.0.0.1` and driving `/v1/*` to spend tokens. Set `server.api_key` to authenticate the data plane from non-loopback origins.
 
 ## Inference endpoints
 
