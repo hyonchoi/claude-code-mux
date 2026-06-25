@@ -22,18 +22,24 @@ jobs:
       version: ${{ steps.validate.outputs.version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Validate version format
         id: validate
+        env:
+          # Pass the dispatch input through the environment instead of
+          # interpolating ${{ inputs.version }} directly into the shell, which
+          # would allow shell injection in the run block.
+          INPUT_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           # Get version from tag or workflow input
-          if [[ "${{ github.event_name }}" == "push" ]]; then
+          if [[ "$EVENT_NAME" == "push" ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
           else
-            VERSION="${{ inputs.version }}"
+            VERSION="$INPUT_VERSION"
           fi
 
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -82,10 +88,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -119,7 +125,7 @@ jobs:
           "$hash  ${{ matrix.archive_name }}" | Out-File -FilePath "${{ matrix.archive_name }}.sha256" -Encoding ASCII
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.target }}
           path: |
@@ -132,10 +138,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -143,7 +149,7 @@ jobs:
         run: ls -R artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           tag_name: ${{ needs.validate.outputs.version }}
           draft: false
