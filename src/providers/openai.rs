@@ -147,7 +147,8 @@ pub(crate) struct OpenAIResponse {
     _object: String,
     model: String,
     choices: Vec<OpenAIChoice>,
-    usage: OpenAIUsage,
+    #[serde(default)]
+    usage: Option<OpenAIUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -995,8 +996,8 @@ impl OpenAIProvider {
             stop_reason,
             stop_sequence: None,
             usage: Usage {
-                input_tokens: response.usage.prompt_tokens,
-                output_tokens: response.usage.completion_tokens,
+                input_tokens: response.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
+                output_tokens: response.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
             },
         }
     }
