@@ -5,6 +5,18 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4-chy] - 2026-06-25
+
+### Added
+- **Defined models bypass auto-map** — when a requested model matches your `auto_map_regex` (e.g. `^claude-`) *and* its name is declared in a `[[models]]` block, the proxy no longer rewrites it to the default model. It keeps its own name and resolves through its own provider mappings. Higher-priority routing (websearch, subagent, think, background) still applies first; this only changes the auto-map step. Lets you keep `auto_map_regex = "^claude-"` for generic Claude traffic while routing a specific `claude-*` model exactly where you point it. See "Auto-mapping" in the README routing logic section.
+
+### Fixed
+- **OAuth token refresh could hang on a slow provider** — `OAuthClient` previously used an HTTP client with no timeout, so a stalled provider endpoint could block a token refresh indefinitely and let an idle token expire anyway. `OAuthClient::new` now builds a 30s-timeout client for all callers, and the background refresh loop injects its shared timeout-bearing client. A slow provider now fails fast instead of wedging refresh.
+
+### For contributors
+- Trace logging for OpenAI requests now records custom header **keys only** (not values) on the Responses API and Chat Completions paths — reduces accidental secret exposure at `RUST_LOG=ccm=trace`. Note: the streaming path's header trace still logs full values.
+- Extracted an `apply_cooldown` helper in `src/server/mod.rs`, and added a `parse_models_cache` helper plus test coverage for Copilot `/models` response parsing.
+
 ## [0.8.3-chy] - 2026-05-20
 
 ### Fixed
