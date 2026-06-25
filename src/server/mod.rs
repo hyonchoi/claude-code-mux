@@ -225,7 +225,11 @@ async fn refresh_provider_if_needed(
                 "openai" => crate::auth::OAuthConfig::openai_codex(),
                 _ => crate::auth::OAuthConfig::anthropic(),
             };
-            let oauth_client = crate::auth::OAuthClient::new(oauth_config, token_store.clone());
+            let oauth_client = crate::auth::OAuthClient::with_client(
+                oauth_config,
+                token_store.clone(),
+                client.clone(),
+            );
             match oauth_client.refresh_token(&provider_id).await {
                 Ok(_) => {
                     info!(
@@ -302,8 +306,7 @@ pub async fn start_server(
             loop {
                 interval.tick().await;
                 for provider_config in &bg_providers {
-                    refresh_provider_if_needed(provider_config, &bg_token_store, &bg_client)
-                        .await;
+                    refresh_provider_if_needed(provider_config, &bg_token_store, &bg_client).await;
                 }
             }
         });
