@@ -154,22 +154,39 @@ fn origin_matches_host(origin: &str, host: &str) -> bool {
 /// Returns true when the Host header authority is a loopback name.
 ///
 /// Accepts `host` or `host:port` for IPv4/hostnames (e.g. `127.0.0.1:3000`,
-/// `localhost`) and the bracketed IPv6 form (`[::1]`, `[::1]:3000`). The whole
-/// 127.0.0.0/8 range counts as loopback. Used to reject DNS-rebinding: an
-/// attacker name that resolves to 127.0.0.1 still sends its own (non-loopback)
-/// Host, so trusting Origin==Host alone is insufficient when no api_key is set.
+/// `localhost`), bare IPv6 (`::1`), and the bracketed IPv6 form (`[::1]`,
+/// `[::1]:3000`). The whole 127.0.0.0/8 range and `::1` count as loopback.
+///
+/// Loopback IPs are recognised by parsing the authority as an `IpAddr` and
+/// calling `is_loopback()` — NOT by a string prefix. A prefix check such as
+/// `starts_with("127.")` would also match attacker-controlled names like
+/// `127.0.0.1.nip.io` (nip.io/sslip.io resolve such names to 127.0.0.1),
+/// reopening the DNS-rebinding bypass this guard exists to close.
 fn host_authority_is_loopback(host: &str) -> bool {
+    use std::net::{IpAddr, Ipv6Addr};
     let host = host.trim();
     // Bracketed IPv6 literal: [::1] or [::1]:port
     if let Some(rest) = host.strip_prefix('[') {
         return match rest.split_once(']') {
-            Some((inner, _)) => inner.eq_ignore_ascii_case("::1"),
+            Some((inner, _)) => inner
+                .parse::<Ipv6Addr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false),
             None => false,
         };
     }
-    // host or host:port
-    let bare = host.split_once(':').map(|(h, _)| h).unwrap_or(host);
-    bare.eq_ignore_ascii_case("localhost") || bare == "127.0.0.1" || bare.starts_with("127.")
+    // Bare IP (covers bare IPv6 like `::1` and IPv4 without a port).
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip.is_loopback();
+    }
+    // Otherwise `host` or `host:port` for IPv4/hostnames.
+    let bare = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    if bare.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    bare.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
 }
 
 /// CSRF defense for browser-originated requests on the control plane.
@@ -360,10 +377,9 @@ pub async fn start_server(
     // Security: refuse to expose an unauthenticated control plane on a non-loopback
     // address. Without an api_key every /api/* route (config rewrite, OAuth token
     // delete/refresh, restart) is open to anyone who can reach the port.
-    let host_is_loopback = matches!(
-        config.server.host.as_str(),
-        "127.0.0.1" | "::1" | "[::1]" | "localhost"
-    );
+    // Reuse the same loopback definition as csrf_guard so the bind-time gate and
+    // the request-time gate cannot silently diverge.
+    let host_is_loopback = host_authority_is_loopback(&config.server.host);
     if config.server.api_key.is_none() {
         if !host_is_loopback {
             anyhow::bail!(
@@ -444,11 +460,23 @@ pub async fn start_server(
         .route("/api/oauth/callback", get(oauth_handlers::oauth_callback))
         .route("/auth/callback", get(oauth_handlers::oauth_callback));
 
-    // Protected routes (auth middleware applied when api_key is configured)
-    let protected_routes = AxumRouter::new()
+    // Data-plane routes: the LLM proxy endpoints. Authenticated by an explicit
+    // `api_key` header (not ambient cookies), so they are NOT a CSRF target and
+    // get no csrf_guard — a cross-origin browser client with a valid api_key, or
+    // a non-browser client reaching a non-loopback Host, must not be 403'd here.
+    let data_plane_routes = AxumRouter::new()
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
         .route("/v1/chat/completions", post(handle_openai_chat_completions))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ));
+
+    // Control-plane routes: config rewrite, OAuth token management, restart.
+    // These trust the loopback bind for access control when no api_key is set, so
+    // they get the full CSRF + DNS-rebinding guard in addition to require_api_key.
+    let control_plane_routes = AxumRouter::new()
         .route("/api/models", get(get_models))
         .route("/api/providers", get(get_providers))
         .route("/api/models-config", get(get_models_config))
@@ -490,7 +518,8 @@ pub async fn start_server(
         .layer(middleware::from_fn_with_state(state.clone(), csrf_guard));
 
     let app = public_routes
-        .merge(protected_routes)
+        .merge(data_plane_routes)
+        .merge(control_plane_routes)
         .with_state(state.clone());
 
     // Clone state before moving it
@@ -2041,6 +2070,18 @@ mod tests {
         assert!(!host_authority_is_loopback(""));
         // A name that merely starts with "127" but isn't the loopback IP.
         assert!(!host_authority_is_loopback("127host.evil.com"));
+
+        // Bare IPv6 loopback (no brackets) is accepted; bare non-loopback IPv6 is not.
+        assert!(host_authority_is_loopback("::1"));
+        assert!(!host_authority_is_loopback("2001:db8::1"));
+
+        // Regression (DNS-rebinding bypass): names that START WITH "127." but are
+        // NOT a loopback IP. nip.io/sslip.io resolve these to 127.0.0.1, so a
+        // prefix check like starts_with("127.") would wrongly accept them and
+        // reopen the bypass. They must be rejected — the Host is the attacker name.
+        assert!(!host_authority_is_loopback("127.0.0.1.nip.io"));
+        assert!(!host_authority_is_loopback("127.0.0.1.nip.io:13456"));
+        assert!(!host_authority_is_loopback("127.0.0.1.attacker.com"));
     }
 
     fn make_configs() -> Vec<ProviderConfig> {
@@ -2558,6 +2599,29 @@ mod tests {
             std::time::Instant::now() + std::time::Duration::from_secs(60),
         );
         assert!(is_on_cooldown(&cooldowns, "my-provider"));
+    }
+
+    #[test]
+    fn test_apply_cooldown_inserts_when_error_warrants() {
+        let cooldowns: dashmap::DashMap<String, std::time::Instant> = dashmap::DashMap::new();
+        let e = crate::providers::error::ProviderError::ApiError {
+            status: 401,
+            message: "Unauthorized".into(),
+        };
+        apply_cooldown(&cooldowns, "my-provider", &e);
+        assert!(is_on_cooldown(&cooldowns, "my-provider"));
+    }
+
+    #[test]
+    fn test_apply_cooldown_noop_when_error_does_not_warrant() {
+        let cooldowns: dashmap::DashMap<String, std::time::Instant> = dashmap::DashMap::new();
+        let e = crate::providers::error::ProviderError::ApiError {
+            status: 500,
+            message: "Internal Server Error".into(),
+        };
+        apply_cooldown(&cooldowns, "my-provider", &e);
+        assert!(!is_on_cooldown(&cooldowns, "my-provider"));
+        assert!(cooldowns.is_empty());
     }
 
     #[test]
