@@ -42,8 +42,11 @@ jobs:
             VERSION="$INPUT_VERSION"
           fi
 
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Invalid version format. Expected format: v0.0.0"
+          # Accept vX.Y.Z with an optional SemVer pre-release/build suffix
+          # (e.g. v0.8.4-chy, v1.2.3-rc.1). The suffix follows SemVer's
+          # pre-release grammar: dot-separated alphanumerics and hyphens.
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Error: Invalid version format. Expected format: v0.0.0 or v0.0.0-suffix"
             exit 1
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
