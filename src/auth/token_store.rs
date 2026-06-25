@@ -132,9 +132,23 @@ impl TokenStore {
         let tokens = self.tokens.read().unwrap();
         let json = serde_json::to_string_pretty(&*tokens).context("Failed to serialize tokens")?;
 
-        // On Unix, create the file with 0600 from the start so there is no window
+        // Atomic replace: write to a sibling temp file, fsync it, then rename
+        // over the target. A crash, disk-full, or interrupted write can only
+        // damage the temp file — never truncate the live token store, which
+        // would lose every provider's refresh token and force a full re-auth.
+        // On Unix the temp is created 0600 from the start so there is no window
         // where the token file is world-readable (fs::write would create at the
-        // process umask, typically 0644, before any later chmod).
+        // process umask, typically 0644). The rename inherits the temp's 0600
+        // inode, so a pre-existing looser-mode target ends up 0600 too.
+        let file_name = self
+            .file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("oauth_tokens.json");
+        let tmp_path =
+            self.file_path
+                .with_file_name(format!(".{}.{}.tmp", file_name, std::process::id()));
+
         #[cfg(unix)]
         {
             use std::io::Write;
@@ -144,21 +158,22 @@ impl TokenStore {
                 .create(true)
                 .truncate(true)
                 .mode(0o600)
-                .open(&self.file_path)
-                .context("Failed to open token file")?;
-            // Tighten perms on a pre-existing file too (mode() only applies on create).
-            let mut perms = file.metadata()?.permissions();
-            use std::os::unix::fs::PermissionsExt;
-            perms.set_mode(0o600);
-            file.set_permissions(perms)?;
+                .open(&tmp_path)
+                .context("Failed to open temp token file")?;
             file.write_all(json.as_bytes())
-                .context("Failed to write token file")?;
+                .context("Failed to write temp token file")?;
+            file.sync_all().context("Failed to fsync temp token file")?;
         }
 
         #[cfg(not(unix))]
         {
-            fs::write(&self.file_path, json).context("Failed to write token file")?;
+            fs::write(&tmp_path, &json).context("Failed to write temp token file")?;
         }
+
+        fs::rename(&tmp_path, &self.file_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            anyhow::Error::new(e).context("Failed to atomically replace token file")
+        })?;
 
         Ok(())
     }
