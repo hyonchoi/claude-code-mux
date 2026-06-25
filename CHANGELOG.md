@@ -10,13 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Defined models bypass auto-map** — when a requested model matches your `auto_map_regex` (e.g. `^claude-`) *and* its name is declared in a `[[models]]` block, the proxy no longer rewrites it to the default model. It keeps its own name and resolves through its own provider mappings. Higher-priority routing (websearch, subagent, think, background) still applies first; this only changes the auto-map step. Lets you keep `auto_map_regex = "^claude-"` for generic Claude traffic while routing a specific `claude-*` model exactly where you point it. See "Auto-mapping" in the README routing logic section.
 
+### Security
+- **Control plane now refuses to run unauthenticated on a public address** — if `server.api_key` is unset, `ccm` will not bind the admin/control API (`/api/*`: config rewrite, OAuth token read/delete/refresh, restart) to a non-loopback host. Set `server.api_key` to expose it on a shared address, or bind to `127.0.0.1`. **Behavior change:** an existing deployment that bound to `0.0.0.0` with no `api_key` will now refuse to start instead of running wide open.
+- **A blank `api_key` is now treated as unset** — `server.api_key = ""` (or whitespace, e.g. an empty templated env var) previously counted as "configured," skipping the loopback/auth gates while still authorizing every request — fully opening the control plane. Blank keys are now normalized to unset and fall back to loopback-only, with a startup warning.
+- **DNS-rebinding defense for both planes** — the control plane validates that the request `Host` is a real loopback authority (parsed as an IP, not a `127.`-prefix string, so `127.0.0.1.nip.io` is rejected) and rejects cross-origin state-changing browser requests. The LLM data plane (`/v1/*`) now gets the same loopback-`Host` check when no `api_key` is set, so a rebinding page can no longer drive it to spend tokens or read model output. Non-browser clients (no `Origin`, loopback `Host`) are unaffected.
+- **Credentials written owner-only and atomically** — the OAuth token store is created `0600` from the start (no world-readable window) and persisted via a temp file + fsync + atomic rename, so a crash or full disk can no longer truncate `oauth_tokens.json` and force a full re-auth. On-disk restart-script permissions were hardened too.
+- **Safer UI restart** — the restart script is written to your user-owned config dir (never a world-writable `/tmp`/`%TEMP%` path), fails closed if no home dir resolves, shell-escapes every interpolated path, and now forwards `--config` so a UI restart reboots with the same config the running process used instead of silently falling back to defaults.
+- **Hardened CI/release** — GitHub Actions are pinned to commit SHAs, release inputs are passed via environment (no shell injection), and the release tag/version sources are kept in sync.
+- Streaming trace headers are redacted and OpenAI trace logging records custom header **keys only** (never values), preventing secret exposure at `RUST_LOG=ccm=trace`.
+
 ### Fixed
 - **OAuth token refresh could hang on a slow provider** — `OAuthClient` previously used an HTTP client with no timeout, so a stalled provider endpoint could block a token refresh indefinitely and let an idle token expire anyway. `OAuthClient::new` now builds a 30s-timeout client for all callers, and the background refresh loop injects its shared timeout-bearing client. A slow provider now fails fast instead of wedging refresh.
 - **Startup banner showed the wrong version** — `ccm start` printed the crate version from `Cargo.toml` (0.7.0) instead of the project `VERSION` file, so the reported version was stale. The banner now reads `VERSION` directly, making it the single source of truth.
 
 ### For contributors
-- Trace logging for OpenAI requests now records custom header **keys only** (not values) across all request paths — Responses API, Chat Completions, and streaming — preventing accidental secret exposure at `RUST_LOG=ccm=trace`.
-- Extracted an `apply_cooldown` helper in `src/server/mod.rs`, and added a `parse_models_cache` helper plus test coverage for Copilot `/models` response parsing.
+- Extracted shared helpers in `src/server/mod.rs` (`apply_cooldown`, `control_plane_requires_loopback` + `control_plane_bind_guard` so the bind-time and request-time gates share one predicate, `data_plane_rebinding_guard`, `normalize_api_key`) and a `parse_models_cache` helper for Copilot `/models`. Added unit + middleware (tower `oneshot`) test coverage for the CSRF/DNS-rebinding guards, bind gate, blank-key normalization, atomic token writes, and shell-quote escaping.
 
 ## [0.8.3-chy] - 2026-05-20
 
