@@ -9,7 +9,9 @@ static SUBAGENT_TAG_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 const SUBAGENT_FLAG: &str = "cc_is_subagent=true";
 
 fn get_subagent_tag_re() -> &'static Regex {
-    SUBAGENT_TAG_RE.get_or_init(|| Regex::new(r"<CCM-SUBAGENT-MODEL>[^<]*</CCM-SUBAGENT-MODEL>").expect("Invalid regex"))
+    SUBAGENT_TAG_RE.get_or_init(|| {
+        Regex::new(r"<CCM-SUBAGENT-MODEL>[^<]*</CCM-SUBAGENT-MODEL>").expect("Invalid regex")
+    })
 }
 
 /// Router for intelligently selecting models based on request characteristics
@@ -239,7 +241,9 @@ impl Router {
         if let Some(SystemPrompt::Blocks(blocks)) = &mut request.system {
             for block in blocks.iter_mut() {
                 if block.text.contains("<CCM-SUBAGENT-MODEL>") {
-                    block.text = get_subagent_tag_re().replace_all(&block.text, "").to_string();
+                    block.text = get_subagent_tag_re()
+                        .replace_all(&block.text, "")
+                        .to_string();
                 }
             }
         } else if let Some(SystemPrompt::Text(text)) = &mut request.system {
@@ -626,7 +630,11 @@ mod tests {
 
         if let Some(SystemPrompt::Blocks(blocks)) = &request.system {
             for block in blocks.iter() {
-                assert!(!block.text.contains("<CCM-SUBAGENT-MODEL>"), "Tag not stripped: {}", block.text);
+                assert!(
+                    !block.text.contains("<CCM-SUBAGENT-MODEL>"),
+                    "Tag not stripped: {}",
+                    block.text
+                );
             }
         }
     }
@@ -658,7 +666,11 @@ mod tests {
         // Legacy tag must also be stripped
         if let Some(SystemPrompt::Blocks(blocks)) = &request.system {
             for block in blocks.iter() {
-                assert!(!block.text.contains("<CCM-SUBAGENT-MODEL>"), "Legacy tag not stripped: {}", block.text);
+                assert!(
+                    !block.text.contains("<CCM-SUBAGENT-MODEL>"),
+                    "Legacy tag not stripped: {}",
+                    block.text
+                );
             }
         }
     }
@@ -677,7 +689,11 @@ mod tests {
         router.route(&mut request).unwrap();
 
         if let Some(SystemPrompt::Text(text)) = &request.system {
-            assert!(!text.contains("<CCM-SUBAGENT-MODEL>"), "Legacy tag not stripped from Text: {}", text);
+            assert!(
+                !text.contains("<CCM-SUBAGENT-MODEL>"),
+                "Legacy tag not stripped from Text: {}",
+                text
+            );
         } else {
             panic!("System prompt variant changed unexpectedly");
         }

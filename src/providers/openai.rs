@@ -997,8 +997,16 @@ impl OpenAIProvider {
             stop_reason,
             stop_sequence: None,
             usage: Usage {
-                input_tokens: response.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
-                output_tokens: response.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
+                input_tokens: response
+                    .usage
+                    .as_ref()
+                    .map(|u| u.prompt_tokens)
+                    .unwrap_or(0),
+                output_tokens: response
+                    .usage
+                    .as_ref()
+                    .map(|u| u.completion_tokens)
+                    .unwrap_or(0),
             },
         }
     }
@@ -1030,7 +1038,11 @@ impl OpenAIProvider {
             stop_sequence: None,
             usage: Usage {
                 input_tokens: response.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
-                output_tokens: response.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
+                output_tokens: response
+                    .usage
+                    .as_ref()
+                    .map(|u| u.output_tokens)
+                    .unwrap_or(0),
             },
         }
     }
