@@ -915,12 +915,26 @@ impl OpenAIProvider {
     }
 
     /// Transform OpenAI response to Anthropic format
-    pub(crate) fn transform_response(&self, response: OpenAIResponse) -> ProviderResponse {
-        let choice = response
-            .choices
-            .into_iter()
-            .next()
-            .expect("OpenAI response must have at least one choice");
+    pub(crate) fn transform_response(
+        &self,
+        response: OpenAIResponse,
+    ) -> Result<ProviderResponse, ProviderError> {
+        // Some OpenAI-compatible upstreams return HTTP 200 with an empty
+        // `choices` array (degenerate body, soft rate-limit, content filter).
+        // Return an error so the router falls back to the next provider
+        // instead of panicking the worker thread.
+        let choice = match response.choices.into_iter().next() {
+            Some(choice) => choice,
+            None => {
+                return Err(ProviderError::ApiError {
+                    status: 502,
+                    message: format!(
+                        "provider '{}' returned a response with no choices",
+                        self.name
+                    ),
+                });
+            }
+        };
 
         // Extract text from content or reasoning (for GLM models via Cerebras)
         let text = if let Some(content) = choice.message.content {
@@ -988,7 +1002,7 @@ impl OpenAIProvider {
                 _ => reason.clone(),
             });
 
-        ProviderResponse {
+        Ok(ProviderResponse {
             id: response.id,
             r#type: "message".to_string(),
             role: "assistant".to_string(),
@@ -1008,7 +1022,7 @@ impl OpenAIProvider {
                     .map(|u| u.completion_tokens)
                     .unwrap_or(0),
             },
-        }
+        })
     }
 
     /// Transform Responses API response to Anthropic format
@@ -1249,7 +1263,7 @@ impl AnthropicProvider for OpenAIProvider {
                     e
                 })?;
 
-            Ok(self.transform_response(openai_response))
+            self.transform_response(openai_response)
         }
     }
 
@@ -1504,7 +1518,7 @@ mod tests {
         )
         .unwrap();
 
-        let transformed = provider.transform_response(response);
+        let transformed = provider.transform_response(response).unwrap();
         assert_eq!(transformed.stop_reason.as_deref(), Some("tool_use"));
         assert_eq!(transformed.content.len(), 2);
 
@@ -1545,7 +1559,7 @@ mod tests {
         )
         .unwrap();
 
-        let transformed = provider.transform_response(response);
+        let transformed = provider.transform_response(response).unwrap();
         assert_eq!(transformed.stop_reason.as_deref(), Some("end_turn"));
     }
 
@@ -1578,9 +1592,36 @@ mod tests {
         )
         .unwrap();
 
-        let transformed = provider.transform_response(response);
+        let transformed = provider.transform_response(response).unwrap();
         assert_eq!(transformed.usage.input_tokens, 0);
         assert_eq!(transformed.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_transform_response_empty_choices_returns_error_not_panic() {
+        let provider = make_provider();
+        // Degenerate body some OpenAI-compatible upstreams return with HTTP 200:
+        // empty `choices`. Must yield an error (for fallback), never panic.
+        let response: OpenAIResponse = serde_json::from_str(
+            r#"{
+                "id": "",
+                "choices": [],
+                "created": 0,
+                "model": "",
+                "object": "chat.completion",
+                "usage": null
+            }"#,
+        )
+        .unwrap();
+
+        let result = provider.transform_response(response);
+        match result {
+            Err(ProviderError::ApiError { status, message }) => {
+                assert_eq!(status, 502);
+                assert!(message.contains("no choices"), "got: {message}");
+            }
+            other => panic!("expected ApiError for empty choices, got: {other:?}"),
+        }
     }
 
     #[test]

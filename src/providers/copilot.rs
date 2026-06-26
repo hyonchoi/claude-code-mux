@@ -601,7 +601,7 @@ impl AnthropicProvider for CopilotProvider {
                 }
             })?;
 
-        Ok(delegate.transform_response(openai_response))
+        delegate.transform_response(openai_response)
     }
 
     async fn send_message_stream(
