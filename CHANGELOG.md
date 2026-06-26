@@ -5,6 +5,14 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5-chy] - 2026-06-26
+
+### Fixed
+- **Missing usage field in Responses API path** — the same nullable-usage fix applied to Chat Completions (nvidia-nim compat) was not tested for the Responses API path. Added test coverage for both paths.
+
+### Changed
+- **Subagent detection flag extracted to constant** — `cc_is_subagent=true` is now a named `SUBAGENT_FLAG` constant, eliminating magic string duplication across the router.
+
 ## [0.8.4-chy] - 2026-06-25
 
 ### Added
