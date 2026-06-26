@@ -58,7 +58,7 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 ### 🚀 Advanced Features
 - 🔀 **Auto-mapping** - Regex-based model name rewrite as a fallback step before the default route (e.g., transform all `claude-*` to the default model, except models you've explicitly defined)
 - 🎯 **Background Detection** - Configurable regex patterns for background task detection
-- 🤖 **Multi-Agent Support** - Dynamic model switching via `CCM-SUBAGENT-MODEL` tags
+- 🤖 **Multi-Agent Support** - Subagent detection via `cc_is_subagent` billing header flag
 - 📊 **Live Testing** - Built-in test interface to verify routing and responses
 - ⚙️ **Centralized Settings** - Dedicated Settings tab for regex pattern management
 - 🔑 **Bearer Token Passthrough** - Forward caller-provided authentication tokens to upstream providers (e.g., Claude Pro/Max via OAuth)
@@ -374,7 +374,7 @@ Configure routing rules (auto-saves on change!):
 - **Think Model**: `kimi-k2` (plan mode with reasoning - 256K context)
 - **Background Model**: `glm-4.5-air` (simple background tasks)
 - **WebSearch Model**: `glm-4.6` (web search tasks)
-- **Subagent Model**: (optional) override for subagent requests tagged with `<CCM-SUBAGENT-MODEL>`
+- **Subagent Model**: (optional) override for subagent requests (detected via `cc_is_subagent=true` billing header)
 - **Auto-map Regex Pattern**: `^claude-` (transform Claude models before routing)
 - **Background Task Regex Pattern**: `(?i)claude.*haiku` (detect background tasks)
 
@@ -417,10 +417,10 @@ Navigate to **Test** tab:
 - **Example**: Claude Code using web search tool
 - **Routes to**: `websearch` model (e.g., GLM-4.6)
 
-### 2. Subagent Model
-- **Trigger**: System prompt contains `<CCM-SUBAGENT-MODEL>model-name</CCM-SUBAGENT-MODEL>` tag
-- **Example**: AI agent specifying model for sub-task
-- **Routes to**: `router.subagent` model if configured (overrides the tag) — otherwise falls through with the tag's model name so think/background/auto-map/default routing applies. Tag is always removed from the prompt.
+### 2. Subagent
+- **Trigger**: System prompt contains `cc_is_subagent=true` in the billing header block
+- **Example**: Claude Code subagent request
+- **Routes to**: `router.subagent` model if configured. If not configured, the request falls through to later routing steps (think/background/auto-map/default). Legacy `<CCM-SUBAGENT-MODEL>` tags are stripped for backward compatibility.
 
 ### 3. Think Mode
 - **Trigger**: Request has `thinking` field with `type: "enabled"`
@@ -466,7 +466,7 @@ Config: auto_map_regex="^claude-", background_regex="(?i)claude.*haiku", backgro
 
 Flow:
 1. WebSearch check: No web_search tool
-2. Subagent check: No CCM-SUBAGENT-MODEL tag
+2. Subagent check: No cc_is_subagent flag
 3. Think check: No thinking field
 4. Background check on ORIGINAL: "claude-4-5-haiku" matches "(?i)claude.*haiku" → Route to "glm-4.5-air"
 Result: glm-4.5-air (background model — short-circuits before auto-map)
@@ -479,7 +479,7 @@ Config: auto_map_regex="^claude-", think="kimi-k2-thinking"
 
 Flow:
 1. WebSearch check: No web_search tool
-2. Subagent check: No CCM-SUBAGENT-MODEL tag
+2. Subagent check: No cc_is_subagent flag
 3. Think check: thinking.type="enabled" → Route to "kimi-k2-thinking"
 Result: kimi-k2-thinking (think model — short-circuits before auto-map)
 ```
@@ -491,7 +491,7 @@ Config: auto_map_regex="^claude-", default="minimax-m2"
 
 Flow:
 1. WebSearch check: No web_search tool
-2. Subagent check: No CCM-SUBAGENT-MODEL tag
+2. Subagent check: No cc_is_subagent flag
 3. Think check: No thinking field
 4. Background check: "glm-4.6" doesn't match background regex
 5. Auto-map: "glm-4.6" doesn't match "^claude-" → No transformation
@@ -519,7 +519,7 @@ Result: glm-4.6 (original model name, routed through model mappings)
 - Default: `minimax-m2` (8% of Claude cost, 100 TPS)
 - Think: `kimi-k2-thinking` (thinking model with 256K context)
 - Background: `glm-4.5-air` (simple tasks)
-- Subagent: `glm-4.5-air` (subagent/tool-use tasks — overrides CCM-SUBAGENT-MODEL tag)
+- Subagent: `glm-4.5-air` (subagent/tool-use tasks — detected via cc_is_subagent header)
 - WebSearch: `glm-4.6` (web search + reasoning)
 - Auto-map Regex: `^claude-` (transform Claude models to minimax-m2)
 - Background Regex: `(?i)claude.*haiku` (detect Haiku models for background)
@@ -1101,7 +1101,7 @@ All three provide **FREE unlimited API access** to subscribers!
 
 Check the routing order:
 1. **WebSearch** (highest priority) - if request has `web_search` tool
-2. **Subagent** - if system prompt contains `<CCM-SUBAGENT-MODEL>` tag
+2. **Subagent** - if system prompt has `cc_is_subagent=true` billing header
 3. **Think Mode** - if request has `thinking` field
 4. **Background** - if ORIGINAL model name matches background regex
 5. **Auto-mapping** - if model matches `auto_map_regex` and isn't an explicitly defined model, rewrite to default

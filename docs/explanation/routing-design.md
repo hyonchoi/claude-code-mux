@@ -11,7 +11,7 @@ So routing has two jobs. First, look at one incoming model name plus the request
 `Router::route()` runs a fixed pipeline. The order is a PRIORITY order, not a sequence of steps that all run. The first rule that matches wins and short-circuits the rest:
 
 1. **WebSearch** - a `web_search` tool in the request is a strong signal, so it goes first.
-2. **Subagent** - an explicit `<CCM-SUBAGENT-MODEL>` tag.
+2. **Subagent** - a `cc_is_subagent=true` billing header flag.
 3. **Think** - plan mode.
 4. **Background** - the cheap path for haiku-class traffic.
 5. **Auto-map** - a bulk rewrite of `claude-*` names to your default.
@@ -35,11 +35,13 @@ So a model whose name matches `auto_map_regex` but is ALSO an explicitly defined
 
 The trade-off: the rule is name-based. The `[[models]].name` must exactly equal the requested name for the bypass to apply. There is no pattern matching on the defined-model side, only exact-name matching.
 
-## The subagent tag fall-through
+## The subagent detection change
 
-The subagent rule has a deliberate fall-through. If a request carries a `<CCM-SUBAGENT-MODEL>` tag but there is no `router.subagent` override configured, the router does not stop there. Instead it sets the request model to the tag's value and lets routing continue.
+The subagent rule used to rely on a `<CCM-SUBAGENT-MODEL>` tag embedded in the system prompt. It now detects subagent requests by scanning for `cc_is_subagent=true` in the billing header block of the system prompt. This is more reliable: the billing header is a structured signal, not a free-text tag that could appear in any block.
 
-That means the tag's model can still be caught by Think, Background, or Auto-map further down the pipeline. The tag picks the name; the rest of the pipeline still gets to route that name. You get the subagent's intent without losing the cheap-path and thinking-model behavior.
+The old tag behavior — extracting the tag's model name and falling through to later routing stages when `router.subagent` was not configured — has been removed. Now the detection is a simple flag: present and configured → route to `router.subagent`; present but not configured → fall through to Think/Background/Auto-map/Default with the original model name; not present → fall through.
+
+Legacy `<CCM-SUBAGENT-MODEL>` tags are still stripped from the prompt for backward compatibility, but they no longer influence routing.
 
 ## Trade-offs
 

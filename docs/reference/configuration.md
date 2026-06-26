@@ -47,7 +47,7 @@ All fields are optional.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `default` | String | required | Fallback model name used when no other rule matches. |
-| `subagent` | String | unset | Overrides the `<CCM-SUBAGENT-MODEL>` tag. |
+| `subagent` | String | unset | Override for subagent requests (detected via `cc_is_subagent=true` billing header). |
 | `background` | String | unset | Model for background requests. |
 | `think` | String | unset | Model for thinking/reasoning requests. |
 | `websearch` | String | unset | Model for web-search requests. |
