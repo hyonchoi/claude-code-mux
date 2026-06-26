@@ -18,6 +18,7 @@ The cooldown length depends on the failure:
 
 - **401 / 403 (auth)** - 240s cooldown. Auth problems do not fix themselves in a few seconds.
 - **429 (rate limit)** - 120s cooldown. Back off, then try again sooner than an auth failure.
+- **502 (bad gateway / empty response)** - 60s cooldown. Covers both real upstream 502s and synthetic 502s the proxy generates when a provider returns HTTP 200 with an empty `choices` array (a degenerate body from soft rate-limits or content filters).
 - **Other errors** - fail over to the next mapping, but do NOT cooldown. A one-off error should not sideline a provider.
 
 Cooldowns are in-memory and keyed per provider name. They are shared across every model that routes to that provider, so if `provider-a` is cooling down, every model that lists `provider-a` skips it until the cooldown clears.

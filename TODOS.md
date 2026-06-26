@@ -210,7 +210,7 @@ Depends on / blocked by:
 - None.
 
 ## [P2] Temporary Provider Deactivation on 4xx Errors
-Resolved: 2026-05-19. DashMap<String, Instant> in AppState. 401/403=60s, 429=30s. Patched all 3 fallback loops in src/server/mod.rs.
+Resolved: 2026-05-19. DashMap<String, Instant> in AppState. 401/403=240s, 429=120s, 502=60s. Patched all 3 fallback loops in src/server/mod.rs.
 What:
 When a provider returns a 4xx error, mark it as temporarily deactivated for a cooldown period and skip it in subsequent requests until the cooldown expires.
 Why:
