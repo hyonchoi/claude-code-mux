@@ -171,7 +171,8 @@ struct OpenAIResponsesResponse {
     id: String,
     model: String,
     output: Vec<ResponsesOutput>,
-    usage: ResponsesUsage,
+    #[serde(default)]
+    usage: Option<ResponsesUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1028,8 +1029,8 @@ impl OpenAIProvider {
             stop_reason: Some("end_turn".to_string()),
             stop_sequence: None,
             usage: Usage {
-                input_tokens: response.usage.input_tokens,
-                output_tokens: response.usage.output_tokens,
+                input_tokens: response.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
+                output_tokens: response.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
             },
         }
     }
@@ -1543,5 +1544,48 @@ mod tests {
         assert_eq!(provider.rate_limit_max_wait_ms, None);
         assert!(provider.rate_limiter.is_none());
         provider.await_rate_limit_permit().await.unwrap();
+    }
+
+    #[test]
+    fn test_transform_response_missing_usage_defaults_to_zero() {
+        let provider = make_provider();
+        // Response with no usage field — simulates nvidia-nim behavior
+        let response: OpenAIResponse = serde_json::from_str(
+            r#"{
+                "id": "chatcmpl-126",
+                "object": "chat.completion",
+                "model": "z-ai/glm-5.1",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "done"
+                    },
+                    "finish_reason": "stop"
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let transformed = provider.transform_response(response);
+        assert_eq!(transformed.usage.input_tokens, 0);
+        assert_eq!(transformed.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_transform_responses_response_missing_usage_defaults_to_zero() {
+        let provider = make_provider();
+        // Responses API response with no usage field — same nvidia-nim compat fix
+        let response: OpenAIResponsesResponse = serde_json::from_str(
+            r#"{
+                "id": "resp-abc123",
+                "model": "gpt-4o",
+                "output": []
+            }"#,
+        )
+        .unwrap();
+
+        let transformed = provider.transform_responses_response(response);
+        assert_eq!(transformed.usage.input_tokens, 0);
+        assert_eq!(transformed.usage.output_tokens, 0);
     }
 }

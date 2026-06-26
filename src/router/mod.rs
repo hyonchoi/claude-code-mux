@@ -4,6 +4,14 @@ use anyhow::Result;
 use regex::Regex;
 use tracing::{debug, info};
 
+static SUBAGENT_TAG_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+
+const SUBAGENT_FLAG: &str = "cc_is_subagent=true";
+
+fn get_subagent_tag_re() -> &'static Regex {
+    SUBAGENT_TAG_RE.get_or_init(|| Regex::new(r"<CCM-SUBAGENT-MODEL>[^<]*</CCM-SUBAGENT-MODEL>").expect("Invalid regex"))
+}
+
 /// Router for intelligently selecting models based on request characteristics
 #[derive(Clone)]
 pub struct Router {
@@ -208,33 +216,35 @@ impl Router {
         }
     }
 
-    /// Detect subagent requests by checking for cc_is_subagent=true in the
-    /// billing header block (blocks[0]) of the system prompt.
+    /// Detect subagent requests by checking for cc_is_subagent=true in any
+    /// system prompt block (typically the billing header block).
     fn is_subagent_request(&self, request: &AnthropicRequest) -> bool {
         match &request.system {
             Some(SystemPrompt::Blocks(blocks)) => {
                 for block in blocks.iter() {
-                    if block.text.contains("cc_is_subagent=true") {
+                    if block.text.contains(SUBAGENT_FLAG) {
                         return true;
                     }
                 }
                 false
             }
             // Text variant: scan for the flag as a fallback
-            Some(SystemPrompt::Text(text)) => text.contains("cc_is_subagent=true"),
+            Some(SystemPrompt::Text(text)) => text.contains(SUBAGENT_FLAG),
             None => false,
         }
     }
 
     /// Strip legacy CCM-SUBAGENT-MODEL tags from all system blocks (backward compat).
     fn strip_subagent_tags(&self, request: &mut AnthropicRequest) {
-        let re =
-            Regex::new(r"<CCM-SUBAGENT-MODEL>[^<]*</CCM-SUBAGENT-MODEL>").expect("Invalid regex");
         if let Some(SystemPrompt::Blocks(blocks)) = &mut request.system {
             for block in blocks.iter_mut() {
                 if block.text.contains("<CCM-SUBAGENT-MODEL>") {
-                    block.text = re.replace_all(&block.text, "").to_string();
+                    block.text = get_subagent_tag_re().replace_all(&block.text, "").to_string();
                 }
+            }
+        } else if let Some(SystemPrompt::Text(text)) = &mut request.system {
+            if text.contains("<CCM-SUBAGENT-MODEL>") {
+                *text = get_subagent_tag_re().replace_all(text, "").to_string();
             }
         }
     }
@@ -577,6 +587,99 @@ mod tests {
             for block in blocks.iter() {
                 assert!(!block.text.contains("<CCM-SUBAGENT-MODEL>"));
             }
+        }
+    }
+
+    #[test]
+    fn test_subagent_text_system_prompt_detection() {
+        // Code path: is_subagent_request with SystemPrompt::Text variant
+        let mut config = create_test_config();
+        config.router.subagent = Some("config-model".to_string());
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Do a subagent task");
+        request.system = Some(SystemPrompt::Text(
+            "x-anthropic-billing-header: cc_is_subagent=true;".to_string(),
+        ));
+
+        let decision = router.route(&mut request).unwrap();
+        assert_eq!(decision.route_type, RouteType::Subagent);
+        assert_eq!(decision.model_name, "config-model");
+    }
+
+    #[test]
+    fn test_strip_multiple_legacy_tags_in_same_block() {
+        // Code path: strip_subagent_tags with replace_all on multiple tags
+        let config = create_test_config();
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Task");
+        request.system = Some(SystemPrompt::Blocks(vec![
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "<CCM-SUBAGENT-MODEL>model1</CCM-SUBAGENT-MODEL> and <CCM-SUBAGENT-MODEL>model2</CCM-SUBAGENT-MODEL>".to_string(),
+                cache_control: None,
+            },
+        ]));
+
+        router.route(&mut request).unwrap();
+
+        if let Some(SystemPrompt::Blocks(blocks)) = &request.system {
+            for block in blocks.iter() {
+                assert!(!block.text.contains("<CCM-SUBAGENT-MODEL>"), "Tag not stripped: {}", block.text);
+            }
+        }
+    }
+
+    #[test]
+    fn test_subagent_route_also_strips_legacy_tag() {
+        // Code path: billing header triggers subagent route, then strip_subagent_tags
+        // also removes legacy CCM-SUBAGENT-MODEL tags on the same request
+        let mut config = create_test_config();
+        config.router.subagent = Some("config-model".to_string());
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Do a subagent task");
+        request.system = Some(SystemPrompt::Blocks(vec![
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "x-anthropic-billing-header: cc_is_subagent=true;".to_string(),
+                cache_control: None,
+            },
+            SystemBlock {
+                r#type: "text".to_string(),
+                text: "<CCM-SUBAGENT-MODEL>model-from-tag</CCM-SUBAGENT-MODEL>".to_string(),
+                cache_control: None,
+            },
+        ]));
+
+        let decision = router.route(&mut request).unwrap();
+        assert_eq!(decision.route_type, RouteType::Subagent);
+        // Legacy tag must also be stripped
+        if let Some(SystemPrompt::Blocks(blocks)) = &request.system {
+            for block in blocks.iter() {
+                assert!(!block.text.contains("<CCM-SUBAGENT-MODEL>"), "Legacy tag not stripped: {}", block.text);
+            }
+        }
+    }
+
+    #[test]
+    fn test_strip_subagent_tags_text_variant() {
+        // Code path: strip_subagent_tags with SystemPrompt::Text containing legacy tag
+        let config = create_test_config();
+        let router = Router::new(config);
+
+        let mut request = create_simple_request("Task");
+        request.system = Some(SystemPrompt::Text(
+            "Some context <CCM-SUBAGENT-MODEL>old-model</CCM-SUBAGENT-MODEL> trailing".to_string(),
+        ));
+
+        router.route(&mut request).unwrap();
+
+        if let Some(SystemPrompt::Text(text)) = &request.system {
+            assert!(!text.contains("<CCM-SUBAGENT-MODEL>"), "Legacy tag not stripped from Text: {}", text);
+        } else {
+            panic!("System prompt variant changed unexpectedly");
         }
     }
 }
