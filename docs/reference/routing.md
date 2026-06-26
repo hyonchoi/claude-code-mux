@@ -13,12 +13,12 @@
 
 ### 2. Subagent
 
-The request system prompt, when it is a blocks array with 2 or more blocks, may carry a `<CCM-SUBAGENT-MODEL>model-name</CCM-SUBAGENT-MODEL>` tag in the second block. The tag is always stripped from the prompt.
+The request system prompt may carry a `cc_is_subagent=true` flag in any system block (typically the billing header block containing `x-anthropic-billing-header`). Legacy `<CCM-SUBAGENT-MODEL>` tags are stripped from `Blocks`-style system prompts for backward compatibility.
 
-- **Trigger:** the tag is present in the second system block.
+- **Trigger:** the `cc_is_subagent=true` flag is present in any system prompt block.
 - **Result:**
-  - If `router.subagent` is configured, route to `router.subagent` (the tag's value is ignored). Short-circuits.
-  - Otherwise, set the request model to the tag's value and continue routing. The Think, Background, Auto-map, and Default stages still apply to that new name.
+  - If `router.subagent` is configured, route to `router.subagent`. Short-circuits.
+  - Otherwise, the request falls through to Think, Background, Auto-map, and Default stages with the original model name.
 
 ### 3. Think
 
@@ -30,7 +30,7 @@ The request system prompt, when it is a blocks array with 2 or more blocks, may 
 - **Trigger:** `router.background` is set, and the model name matches `background_regex` (default `(?i)claude.*haiku`).
 - **Result:** Route to `router.background`. Short-circuits.
 
-This stage checks the original model name, captured before auto-map (and after the subagent tag may have changed it).
+This stage checks the original model name, captured before auto-map.
 
 ### 5. Auto-map
 
@@ -76,7 +76,7 @@ These walkthroughs assume `router.default = "default-model"` and the defaults `a
 Request model: `claude-3-5-haiku-20241022`. `router.background` is set to `background-model`.
 
 1. WebSearch: no `web_search` tool. Skip.
-2. Subagent: no tag. Skip.
+2. Subagent: no cc_is_subagent flag. Skip.
 3. Think: no `thinking.enabled`. Skip.
 4. Background: name matches `(?i)claude.*haiku`. **Route to `background-model`.** Short-circuits.
 

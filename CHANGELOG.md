@@ -5,10 +5,21 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5-chy] - 2026-06-26
+
+### Fixed
+- **Missing usage field in Responses API path** — the same nullable-usage fix applied to Chat Completions (nvidia-nim compat) was not tested for the Responses API path. Added test coverage for both paths.
+
+### Changed
+- **Subagent detection flag extracted to constant** — `cc_is_subagent=true` is now a named `SUBAGENT_FLAG` constant, eliminating magic string duplication across the router.
+
 ## [0.8.4-chy] - 2026-06-25
 
 ### Added
 - **Defined models bypass auto-map** — when a requested model matches your `auto_map_regex` (e.g. `^claude-`) *and* its name is declared in a `[[models]]` block, the proxy no longer rewrites it to the default model. It keeps its own name and resolves through its own provider mappings. Higher-priority routing (websearch, subagent, think, background) still applies first; this only changes the auto-map step. Lets you keep `auto_map_regex = "^claude-"` for generic Claude traffic while routing a specific `claude-*` model exactly where you point it. See "Auto-mapping" in the README routing logic section.
+
+### Changed
+- **Subagent detection uses billing header instead of system prompt tags** — the router now detects subagent requests by scanning for `cc_is_subagent=true` in the system prompt (any block, not just the billing header). The old `<CCM-SUBAGENT-MODEL>` tag mechanism has been retired: tags are still stripped from `Blocks`-style prompts for backward compatibility, but they no longer influence routing. When `router.subagent` is not configured, the request falls through to Think/Background/Auto-map/Default — the previous fall-through behavior (extracting the tag's model name) has been removed.
 
 ### Security
 - **Control plane now refuses to run unauthenticated on a public address** — if `server.api_key` is unset, `ccm` will not bind the admin/control API (`/api/*`: config rewrite, OAuth token read/delete/refresh, restart) to a non-loopback host. Set `server.api_key` to expose it on a shared address, or bind to `127.0.0.1`. **Behavior change:** an existing deployment that bound to `0.0.0.0` with no `api_key` will now refuse to start instead of running wide open.
@@ -22,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **OAuth token refresh could hang on a slow provider** — `OAuthClient` previously used an HTTP client with no timeout, so a stalled provider endpoint could block a token refresh indefinitely and let an idle token expire anyway. `OAuthClient::new` now builds a 30s-timeout client for all callers, and the background refresh loop injects its shared timeout-bearing client. A slow provider now fails fast instead of wedging refresh.
 - **Startup banner showed the wrong version** — `ccm start` printed the crate version from `Cargo.toml` (0.7.0) instead of the project `VERSION` file, so the reported version was stale. The banner now reads `VERSION` directly, making it the single source of truth.
+- **OpenAI Chat Completions provider panicked when upstream omitted `usage`** — some providers (e.g. NVIDIA NIM) don't include the `usage` field in Chat Completions responses. The field is now `Option<OpenAIUsage>` with a default, and token counts fall back to `0` when missing. The Responses API path is unaffected.
 
 ### For contributors
 - Extracted shared helpers in `src/server/mod.rs` (`apply_cooldown`, `control_plane_requires_loopback` + `control_plane_bind_guard` so the bind-time and request-time gates share one predicate, `data_plane_rebinding_guard`, `normalize_api_key`) and a `parse_models_cache` helper for Copilot `/models`. Added unit + middleware (tower `oneshot`) test coverage for the CSRF/DNS-rebinding guards, bind gate, blank-key normalization, atomic token writes, and shell-quote escaping.
