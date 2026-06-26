@@ -55,8 +55,8 @@ fn build_refreshed_copilot_token(
     }
 }
 
-/// Returns the cooldown duration when a provider returns a triggering 4xx error.
-/// 401/403 → 240 seconds, 429 → 120 seconds, all others → None (no deactivation).
+/// Returns the cooldown duration when a provider returns a triggering error.
+/// 401/403 → 240s, 429 → 120s, 502 (incl. synthetic empty-choices) → 60s, others → None.
 fn cooldown_for_4xx(e: &crate::providers::error::ProviderError) -> Option<std::time::Duration> {
     if let crate::providers::error::ProviderError::ApiError { status, .. } = e {
         match *status {
