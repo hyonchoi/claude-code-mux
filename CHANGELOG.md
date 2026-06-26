@@ -5,6 +5,12 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6-chy] - 2026-06-26
+
+### Fixed
+- **OpenAI-compatible providers no longer crash on empty choices** — some upstreams (soft rate-limits, content filters) return HTTP 200 with an empty `choices` array. Previously this panicked the worker thread via `.expect()`. The proxy now returns a 502 error and falls back to the next provider in the chain.
+- **Empty-choices providers are temporarily cooled down** — when a provider returns an empty-choices response, it is placed on a 60-second cooldown so subsequent requests route to healthy providers instead of repeatedly hitting a provider that is soft-rejecting.
+
 ## [0.8.5-chy] - 2026-06-26
 
 ### Fixed
