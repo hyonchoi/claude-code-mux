@@ -44,12 +44,16 @@ on recent errors or latency.
 Health-aware tie-breaking (e.g., "prefer provider with fewer recent errors")
 is explicitly deferred. See TODOS.md for the follow-up item.
 
-## Temporary Cooldowns (4xx Errors)
+## Temporary Cooldowns
 
-Separately from the static ordering, providers that return 401, 403, or 429
-are placed on a temporary in-memory cooldown (60s for 401/403, 30s for 429).
-Providers on cooldown are skipped in the fallback loop for the duration.
-Cooldowns are lost on server restart.
+Separately from the static ordering, providers that return certain error
+codes are placed on a temporary in-memory cooldown. Providers on cooldown
+are skipped in the fallback loop for the duration. Cooldowns are lost on
+server restart.
+
+- **401 / 403 (auth)** - 240s cooldown.
+- **429 (rate limit)** - 120s cooldown.
+- **502 (bad gateway / empty response)** - 60s cooldown. This includes synthetic 502s the proxy generates when a provider returns HTTP 200 with an empty `choices` array.
 
 This is an operational skip mechanism, not a health score. It does not change
 the static priority order.

@@ -209,20 +209,20 @@ Priority:
 Depends on / blocked by:
 - None.
 
-## [P2] Temporary Provider Deactivation on 4xx Errors
+## [P2] Temporary Provider Deactivation on Triggering Errors
 Resolved: 2026-05-19. DashMap<String, Instant> in AppState. 401/403=240s, 429=120s, 502=60s. Patched all 3 fallback loops in src/server/mod.rs.
 What:
-When a provider returns a 4xx error, mark it as temporarily deactivated for a cooldown period and skip it in subsequent requests until the cooldown expires.
+When a provider returns a triggering error (auth failure, rate limit, or bad gateway), mark it as temporarily deactivated for a cooldown period and skip it in subsequent requests until the cooldown expires.
 Why:
-Avoids hammering a provider that is rate-limiting (429) or has invalid credentials (401/403), reducing wasted latency on doomed fallback attempts.
+Avoids hammering a provider that is rate-limiting (429), has invalid credentials (401/403), or is returning empty/bad responses (502), reducing wasted latency on doomed fallback attempts.
 Pros:
 - Faster fallback path: skips known-bad providers immediately.
 - Reduces noise in provider error logs during outage periods.
 Cons:
 - Requires shared mutable state in AppState (e.g. `DashMap<String, Instant>`).
-- Cooldown duration policy needs tuning per error code (e.g. 60s for 429, longer for 401/403).
+- Cooldown duration policy needs tuning per error code (401/403=240s, 429=120s, 502=60s).
 Context:
-Raised in conversation 2026-05-19. Implementation point: `Err(e)` branch in the provider fallback loop at `src/server/mod.rs` ~line 1049. Differentiate 4xx vs 5xx — 5xx may be transient and should not trigger deactivation.
+Raised in conversation 2026-05-19. Implementation point: `Err(e)` branch in the provider fallback loop at `src/server/mod.rs`. 502 cooldown added in v0.8.6-chy to handle synthetic 502s from providers returning empty choices arrays.
 Effort estimate:
 - Human team: S
 - CC+gstack: S
