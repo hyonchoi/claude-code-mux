@@ -13,9 +13,9 @@
 
 ### 2. Subagent
 
-The request system prompt may carry a `cc_is_subagent=true` flag in the billing header block (a block containing `x-anthropic-billing-header`). Legacy `<CCM-SUBAGENT-MODEL>` tags are stripped for backward compatibility.
+The request system prompt may carry a `cc_is_subagent=true` flag in any system block (typically the billing header block containing `x-anthropic-billing-header`). Legacy `<CCM-SUBAGENT-MODEL>` tags are stripped from `Blocks`-style system prompts for backward compatibility.
 
-- **Trigger:** the `cc_is_subagent=true` flag is present in the billing header block.
+- **Trigger:** the `cc_is_subagent=true` flag is present in any system prompt block.
 - **Result:**
   - If `router.subagent` is configured, route to `router.subagent`. Short-circuits.
   - Otherwise, the request falls through to Think, Background, Auto-map, and Default stages with the original model name.

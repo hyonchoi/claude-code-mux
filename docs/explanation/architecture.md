@@ -57,7 +57,7 @@ The proxy never asks the client to understand any of the upstream shapes. The ad
 
 - `src/main.rs` - CLI entry (`start` / `stop` / `restart` / `status` / `model` / `init`). Reads `VERSION` via `include_str!` for the startup banner.
 - `src/cli/` - config types (`AppConfig`, `ServerConfig`, `RouterConfig`, `ModelConfig`, `ModelMapping`), TOML loading, and environment-variable resolution.
-- `src/router/` - `Router::route`, the priority pipeline, auto-map, and subagent tag handling. Decides the final model name. See [../explanation/routing-design.md](../explanation/routing-design.md).
+- `src/router/` - `Router::route`, the priority pipeline, auto-map, and subagent detection via billing header flag. Decides the final model name. See [../explanation/routing-design.md](../explanation/routing-design.md).
 - `src/providers/` - the `AnthropicProvider` trait, per-provider adapters, the registry that maps `provider_type` to an adapter, rate limiting (a governor token bucket), and SSE streaming.
 - `src/server/` - the axum HTTP server, the `/v1/*` and `/api/*` handlers, model-to-provider resolution with cooldown and fallback, the single-file admin UI (`admin.html`), OAuth handlers, and background token refresh.
 - `src/auth/` - the OAuth client (`OAuthClient`) and the on-disk token store (`~/.claude-code-mux/oauth_tokens.json`, `chmod 0600` on unix).

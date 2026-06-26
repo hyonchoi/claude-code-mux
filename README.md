@@ -418,9 +418,9 @@ Navigate to **Test** tab:
 - **Routes to**: `websearch` model (e.g., GLM-4.6)
 
 ### 2. Subagent
-- **Trigger**: System prompt contains `cc_is_subagent=true` in the billing header block
+- **Trigger**: `cc_is_subagent=true` appears in any system prompt block (typically the billing header block)
 - **Example**: Claude Code subagent request
-- **Routes to**: `router.subagent` model if configured. If not configured, the request falls through to later routing steps (think/background/auto-map/default). Legacy `<CCM-SUBAGENT-MODEL>` tags are stripped for backward compatibility.
+- **Routes to**: `router.subagent` model if configured. If not configured, the request falls through to later routing steps (think/background/auto-map/default). Legacy `<CCM-SUBAGENT-MODEL>` tags in `Blocks`-style prompts are stripped for backward compatibility.
 
 ### 3. Think Mode
 - **Trigger**: Request has `thinking` field with `type: "enabled"`

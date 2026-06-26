@@ -37,11 +37,11 @@ The trade-off: the rule is name-based. The `[[models]].name` must exactly equal 
 
 ## The subagent detection change
 
-The subagent rule used to rely on a `<CCM-SUBAGENT-MODEL>` tag embedded in the system prompt. It now detects subagent requests by scanning for `cc_is_subagent=true` in the billing header block of the system prompt. This is more reliable: the billing header is a structured signal, not a free-text tag that could appear in any block.
+The subagent rule used to rely on a `<CCM-SUBAGENT-MODEL>` tag embedded in the system prompt. It now detects subagent requests by scanning any system block — and the plain-text system variant — for the `cc_is_subagent=true` substring. The billing header is a more reliable signal: it is structured, not free-text, and lives in a predictable location.
 
 The old tag behavior — extracting the tag's model name and falling through to later routing stages when `router.subagent` was not configured — has been removed. Now the detection is a simple flag: present and configured → route to `router.subagent`; present but not configured → fall through to Think/Background/Auto-map/Default with the original model name; not present → fall through.
 
-Legacy `<CCM-SUBAGENT-MODEL>` tags are still stripped from the prompt for backward compatibility, but they no longer influence routing.
+Legacy `<CCM-SUBAGENT-MODEL>` tags in `Blocks`-style prompts are still stripped for backward compatibility, but they no longer influence routing.
 
 ## Trade-offs
 
