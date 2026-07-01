@@ -340,24 +340,32 @@ fn normalize_mid_conversation_system(request: &mut AnthropicRequest) {
 
         let system_text = match &request.messages[i].content {
             MessageContent::Text(t) => t.clone(),
-            MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
+            MessageContent::Blocks(blocks) => {
+                let non_text = blocks.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).count();
+                let text = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if non_text > 0 && text.trim().is_empty() {
+                    info!("📝 Mid-conversation system message has {} non-text block(s) with no text — dropping (non-text content not preserved)", non_text);
+                }
+                text
+            }
         };
 
         request.messages.remove(i);
 
         if system_text.trim().is_empty() {
-            info!("📝 Dropped empty mid-conversation system message");
+            info!("📝 Dropped mid-conversation system message with empty text content");
             continue;
         }
 
-        let wrapped = if system_text.contains("<system-reminder>") {
+        let trimmed = system_text.trim();
+        let wrapped = if trimmed.starts_with("<system-reminder>") && trimmed.ends_with("</system-reminder>") {
             system_text
         } else {
             format!("<system-reminder>\n{}\n</system-reminder>", system_text)
