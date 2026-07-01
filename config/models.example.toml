@@ -16,6 +16,9 @@ name = "claude-sonnet-4-5"  # External model name (used in API requests)
   priority = 2
   provider = "openrouter"
   actual_model = "anthropic/claude-3.5-sonnet"
+  # Normalize role:"system" messages from opus/sonnet-5 payloads
+  # that OpenRouter targets may reject
+  strip_mid_conversation_system = true
 
 # Example: gpt-5.1 mapping
 [[models]]
@@ -25,8 +28,11 @@ name = "gpt-5.1"
   priority = 1
   provider = "openai"
   actual_model = "gpt-5.1"
+  # Non-Anthropic providers never accept role:"system" in messages
+  strip_mid_conversation_system = true
 
   [[models.mappings]]
   priority = 2
   provider = "openrouter"
   actual_model = "openai/gpt-5.1"
+  strip_mid_conversation_system = true
