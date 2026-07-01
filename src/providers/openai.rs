@@ -755,6 +755,7 @@ impl OpenAIProvider {
             // Defense-in-depth: skip mid-conversation role:"system" messages
             // that may have slipped past normalization
             if msg.role == "system" {
+                tracing::warn!("🛡️ Dropping residual role:system message in OpenAI transform — normalize_mid_conversation_system may not have run for this mapping");
                 continue;
             }
             match &msg.content {
