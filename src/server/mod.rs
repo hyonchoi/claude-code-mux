@@ -387,8 +387,21 @@ fn normalize_mid_conversation_system(request: &mut AnthropicRequest) {
         info!("📝 Normalized mid-conversation system message into user <system-reminder> block");
     }
 
-    for (offset, turn) in prepend_user_turns.into_iter().enumerate() {
-        request.messages.insert(offset, turn);
+    if !prepend_user_turns.is_empty() {
+        let all_blocks: Vec<ContentBlock> = prepend_user_turns
+            .into_iter()
+            .flat_map(|m| match m.content {
+                MessageContent::Blocks(blocks) => blocks,
+                MessageContent::Text(t) => vec![ContentBlock::Text { text: t }],
+            })
+            .collect();
+        request.messages.insert(
+            0,
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(all_blocks),
+            },
+        );
     }
 }
 
@@ -3327,6 +3340,37 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_normalize_multiple_leading_system_messages_merge_into_single_user() {
+        // Multiple system messages before any user turn must collapse into ONE
+        // synthesized user turn, not multiple consecutive user turns.
+        let mut req = make_req(vec![
+            Message { role: "system".to_string(), content: MessageContent::Text("hook1".to_string()) },
+            Message { role: "system".to_string(), content: MessageContent::Text("hook2".to_string()) },
+            Message { role: "assistant".to_string(), content: MessageContent::Text("hi".to_string()) },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 2, "should be [user, assistant], not multiple user turns");
+        assert_eq!(req.messages[0].role, "user");
+        assert_eq!(req.messages[1].role, "assistant");
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 2, "both system messages should be blocks in the same user turn");
+                for block in blocks {
+                    if let ContentBlock::Text { text } = block {
+                        assert!(text.contains("<system-reminder>"));
+                    } else {
+                        panic!("Expected Text blocks");
+                    }
+                }
+                // hook1 comes before hook2
+                if let ContentBlock::Text { text } = &blocks[0] { assert!(text.contains("hook1")); }
+                if let ContentBlock::Text { text } = &blocks[1] { assert!(text.contains("hook2")); }
+            }
+            _ => panic!("Expected Blocks content"),
         }
     }
 
