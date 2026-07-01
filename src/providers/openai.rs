@@ -752,6 +752,11 @@ impl OpenAIProvider {
 
         // Transform messages
         for msg in &request.messages {
+            // Defense-in-depth: skip mid-conversation role:"system" messages
+            // that may have slipped past normalization
+            if msg.role == "system" {
+                continue;
+            }
             match &msg.content {
                 MessageContent::Text(text) => {
                     // Simple text message
@@ -1640,5 +1645,41 @@ mod tests {
         let transformed = provider.transform_responses_response(response);
         assert_eq!(transformed.usage.input_tokens, 0);
         assert_eq!(transformed.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_transform_request_skips_residual_system_role() {
+        let provider = make_provider();
+        let request = AnthropicRequest {
+            model: "test".to_string(),
+            messages: vec![
+                crate::models::Message {
+                    role: "user".to_string(),
+                    content: crate::models::MessageContent::Text("hello".to_string()),
+                },
+                crate::models::Message {
+                    role: "system".to_string(),
+                    content: crate::models::MessageContent::Text("leaked system msg".to_string()),
+                },
+            ],
+            max_tokens: 1024,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let result = provider.transform_request(&request).unwrap();
+        for msg in &result.messages {
+            assert_ne!(msg.role, "system",
+                "OpenAI messages should not contain role:system entries");
+        }
     }
 }
