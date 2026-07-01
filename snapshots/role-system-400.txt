@@ -1,0 +1,37 @@
+2026-07-01T00:28:08.045470Z  INFO ccm::server: Received request for model: claude-sonnet-5
+2026-07-01T00:28:08.046367Z  INFO ccm::server: 🔑 Passthrough mode detected (caller-provided bearer token)
+2026-07-01T00:28:08.047323Z DEBUG ccm::router: 🔀 Auto-mapped model 'claude-sonnet-5' → 'claude-sonnet-4-6'
+2026-07-01T00:28:08.047344Z DEBUG ccm::router: ✅ Using model: claude-sonnet-4-6
+2026-07-01T00:28:08.047354Z  INFO ccm::server: 🎯 Routed to: claude-sonnet-4-6 (default)
+2026-07-01T00:28:08.047363Z  INFO ccm::server: 📋 Found 4 provider mappings for model: claude-sonnet-4-6
+2026-07-01T00:28:08.047373Z  INFO ccm::server: 🔄 Trying mapping 1/4: provider=claude-pt, actual_model=claude-sonnet-4-6
+2026-07-01T00:28:08.048236Z  INFO ccm::server: 🔑 Passthrough auth active: original_model=claude-sonnet-5, target_provider=claude-pt
+2026-07-01T00:28:08.048265Z  INFO ccm::server: 🌊 Streaming request to provider: claude-pt
+2026-07-01T00:28:08.048291Z DEBUG ccm::providers::anthropic_compatible: 🔐 Using OAuth Bearer token for streaming on claude-pt
+2026-07-01T00:28:08.048302Z DEBUG ccm::providers::anthropic_compatible: claude-pt [stream]: custom beta options provided, parsing and validating: 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11'
+2026-07-01T00:28:08.048312Z DEBUG ccm::server: parse_anthropic_beta: starting parse of header: 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11'
+2026-07-01T00:28:08.048324Z DEBUG ccm::server: parse_anthropic_beta: parsed 11 options from header
+2026-07-01T00:28:08.048331Z DEBUG ccm::server: parse_anthropic_beta: option[0] = 'claude-code-20250219'
+2026-07-01T00:28:08.048338Z DEBUG ccm::server: parse_anthropic_beta: option[1] = 'oauth-2025-04-20'
+2026-07-01T00:28:08.048345Z DEBUG ccm::server: parse_anthropic_beta: option[2] = 'interleaved-thinking-2025-05-14'
+2026-07-01T00:28:08.048352Z DEBUG ccm::server: parse_anthropic_beta: option[3] = 'redact-thinking-2026-02-12'
+2026-07-01T00:28:08.048359Z DEBUG ccm::server: parse_anthropic_beta: option[4] = 'thinking-token-count-2026-05-13'
+2026-07-01T00:28:08.048366Z DEBUG ccm::server: parse_anthropic_beta: option[5] = 'context-management-2025-06-27'
+2026-07-01T00:28:08.048372Z DEBUG ccm::server: parse_anthropic_beta: option[6] = 'prompt-caching-scope-2026-01-05'
+2026-07-01T00:28:08.048379Z DEBUG ccm::server: parse_anthropic_beta: option[7] = 'mid-conversation-system-2026-04-07'
+2026-07-01T00:28:08.048386Z DEBUG ccm::server: parse_anthropic_beta: option[8] = 'advisor-tool-2026-03-01'
+2026-07-01T00:28:08.048392Z DEBUG ccm::server: parse_anthropic_beta: option[9] = 'effort-2025-11-24'
+2026-07-01T00:28:08.048399Z DEBUG ccm::server: parse_anthropic_beta: option[10] = 'extended-cache-ttl-2025-04-11'
+2026-07-01T00:28:08.048406Z DEBUG ccm::server: parse_anthropic_beta: parsed options: ["claude-code-20250219", "oauth-2025-04-20", "interleaved-thinking-2025-05-14", "redact-thinking-2026-02-12", "thinking-token-count-2026-05-13", "context-management-2025-06-27", "prompt-caching-scope-2026-01-05", "mid-conversation-system-2026-04-07", "advisor-tool-2026-03-01", "effort-2025-11-24", "extended-cache-ttl-2025-04-11"]
+2026-07-01T00:28:08.048416Z DEBUG ccm::providers::anthropic_compatible: claude-pt [stream]: parse_anthropic_beta succeeded, got 11 options
+2026-07-01T00:28:08.048424Z DEBUG ccm::providers::anthropic_compatible: claude-pt [stream]: provider has NO supported beta options list configured, accepting header as-is
+2026-07-01T00:28:08.049097Z DEBUG hyper_util::client::legacy::pool: reuse idle connection for ("https", api.anthropic.com)
+2026-07-01T00:28:08.252569Z DEBUG hyper_util::client::legacy::pool: pooling idle connection for ("https", api.anthropic.com)
+2026-07-01T00:28:08.253140Z  WARN ccm::server: ⚠️ Provider claude-pt streaming failed: Provider API error: 400 - claude-pt API error: {"type":"error","error":{"type":"invalid_request_error","message":"role 'system' is not supported on this model"},"request_id":"req_011CcaPcKgXNsXAdX4C3BvNv"}, trying next fallback
+2026-07-01T00:28:08.253232Z  INFO ccm::server: 🔄 Trying mapping 2/4: provider=qwen, actual_model=Qwen3.6-27B
+2026-07-01T00:28:08.255398Z  INFO ccm::server: 📝 Stripped all beta options from request
+2026-07-01T00:28:08.255508Z  INFO ccm::server: 🔑 Passthrough auth active: original_model=claude-sonnet-5, target_provider=qwen
+2026-07-01T00:28:08.255559Z  INFO ccm::server: 🌊 Streaming request to provider: qwen
+2026-07-01T00:28:08.258673Z DEBUG hyper_util::client::legacy::pool: reuse idle connection for ("https", fir01.seas.upenn.edu)
+2026-07-01T00:28:08.308389Z DEBUG hyper_util::client::legacy::pool: pooling idle connection for ("https", fir01.seas.upenn.edu)
+2026-07-01T00:28:08.309729Z  WARN ccm::server: ⚠️ Provider qwen streaming failed: Provider API error: 400 - {"error":{"message":"System message must be at the beginning.","type":"BadRequestError","param":null,"code":400}}, trying next fallback
