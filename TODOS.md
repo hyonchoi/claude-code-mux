@@ -254,3 +254,45 @@ Priority:
 - P3
 Depends on / blocked by:
 - None (can be fixed independently after the dialog refactor lands).
+
+## [P1] Strip `role: "system"` Messages When Redirecting Across Models/Providers
+What:
+When the mux redirects a request to a different model than the client targeted — a
+non-Anthropic provider, or a different Anthropic model (e.g. opus-4-8 -> sonnet-4-6,
+sonnet-5 -> sonnet-4-6) — any standalone `role: "system"` message in the `messages`
+array must be normalized away. Newer Claude Code payloads (opus-4.8, sonnet-5) emit
+SessionStart hook context as a mid-conversation `{role:"system", content:<str>}`
+message; sonnet-4.6 and non-Anthropic providers do not accept that role in `messages`
+(the Messages API requires alternating user/assistant turns). Transform: wrap the
+content in `<system-reminder>...</system-reminder>`, convert to a `role:"user"` text
+block, and merge it into the nearest preceding user message (to preserve alternation);
+then drop the `system` message. Do NOT hoist it to the top-level `system` field — it is
+turn-positional, and `system[]` blocks carry `cache_control:{ttl:1h}` that appended
+content would disturb.
+Why:
+Redirecting to a model/provider that rejects `role:"system"` yields a 400 and silently
+breaks the fallback/routing feature for these newer payload shapes.
+Pros:
+- Cross-model/provider redirects accept the payload; reproduces the exact shape Claude
+  Code natively sends sonnet-4.6.
+- Preserves the injected hook context instead of dropping it.
+Cons:
+- Requires a message-normalization pass in the request-rewrite path (router/providers),
+  plus a rule for when to apply it (routed model != client-requested model, or target is
+  a non-Anthropic provider).
+- Edge cases: no preceding user message (prepend to the following user turn or synthesize
+  one); multiple `system` messages; content already wrapped.
+Context:
+Identified 2026-07-01 from snapshot analysis in snapshots/REQUEST-STRUCTURE-DIFF.md.
+`sonnet-5.json` messages[1] = {role:"system", len 13984} (SessionStart hook); `sonnet-4-6.json`
+carries the same class of content as user-role `<system-reminder>` blocks merged into
+messages[0]. Implementation point: request-rewrite / model-mapping in `src/router/` or
+`src/providers/`. Apply when the routed model differs from the client-requested model
+(opus-4-8 -> sonnet-4-6, sonnet-5 -> sonnet-4-6, etc.) or the target is non-Anthropic.
+Effort estimate:
+- Human team: S
+- CC+gstack: S
+Priority:
+- P1
+Depends on / blocked by:
+- None.
