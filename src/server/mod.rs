@@ -1463,8 +1463,9 @@ async fn handle_openai_chat_completions(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
-        // Save original beta header to restore for each mapping attempt
+        // Save originals to restore for each mapping attempt (normalization mutates messages)
         let original_beta_header = anthropic_request.anthropic_beta_header.clone();
+        let original_messages = anthropic_request.messages.clone();
 
         // Try each mapping in priority order (or just the forced one)
         let mut fallback_failures = Vec::new();
@@ -1497,8 +1498,9 @@ async fn handle_openai_chat_completions(
                         None
                     };
 
-                // Restore original beta header before applying mapping-specific stripping
+                // Restore originals before applying mapping-specific transforms
                 anthropic_request.anthropic_beta_header = original_beta_header.clone();
+                anthropic_request.messages = original_messages.clone();
 
                 // Strip beta options if configured in the mapping
                 strip_beta_options_from_request(
