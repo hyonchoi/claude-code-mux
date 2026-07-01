@@ -34,14 +34,14 @@ pub struct AnthropicRequest {
 }
 
 /// Message in the conversation
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct Message {
     pub role: String,
     pub content: MessageContent,
 }
 
 /// Message content can be string or array of content blocks
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
@@ -66,7 +66,7 @@ pub struct SystemBlock {
 }
 
 /// Tool result content can be string or array of content blocks
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum ToolResultContent {
     Text(String),
@@ -91,7 +91,7 @@ impl ToolResultContent {
 }
 
 /// Content blocks allowed in tool results
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ToolResultBlock {
     #[serde(rename = "text")]
@@ -101,7 +101,7 @@ pub enum ToolResultBlock {
 }
 
 /// Content block for multimodal messages
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
@@ -124,7 +124,7 @@ pub enum ContentBlock {
 }
 
 /// Image source for vision API
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ImageSource {
     pub r#type: String, // "base64" or "url"
     #[serde(skip_serializing_if = "Option::is_none")]
