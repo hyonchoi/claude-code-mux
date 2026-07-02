@@ -28,7 +28,8 @@ name = "gpt-5.1"
   priority = 1
   provider = "openai"
   actual_model = "gpt-5.1"
-  # Non-Anthropic providers never accept role:"system" in messages
+  # Residual mid-conversation role:"system" entries (from opus/sonnet-5
+  # SessionStart hooks) are not valid in OpenAI-format messages
   strip_mid_conversation_system = true
 
   [[models.mappings]]

@@ -93,7 +93,7 @@ An array of upstream providers. Each provider is referenced by name from model m
 | `actual_model` | String | required | The model name sent upstream to that provider. |
 | `strip_beta_options` | bool | `false` | Strip all beta options before sending upstream. |
 | `strip_specific_beta` | array of String | `[]` | Strip only these beta options. Overrides `strip_beta_options` when set. |
-| `strip_mid_conversation_system` | bool | `false` | Normalize mid-conversation `role:"system"` messages (emitted by opus-4.8/sonnet-5 SessionStart hooks) into user `<system-reminder>` blocks before dispatch. Required for targets that reject `role:"system"` inside `messages`, e.g. sonnet-4.6 and non-Anthropic providers. |
+| `strip_mid_conversation_system` | bool | `false` | Normalize mid-conversation `role:"system"` messages (emitted by opus-4.8/sonnet-5 SessionStart hooks) into user `<system-reminder>` blocks before dispatch. Required for targets that reject `role:"system"` inside `messages`, e.g. sonnet-4.6 and non-Anthropic providers. Note: empty system messages are silently dropped; non-text content blocks inside a system message are logged but not preserved in the wrapper. |
 
 ## Model resolution
 
