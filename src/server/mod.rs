@@ -3584,4 +3584,117 @@ mod tests {
         strip_beta_options_from_request(&mut req, true, &[]);
         assert!(req.anthropic_beta_header.is_none());
     }
+
+    #[test]
+    fn test_normalize_system_message_with_non_text_blocks_drops_image() {
+        // Non-text blocks (e.g. image) in a system message are silently dropped;
+        // only text content survives in the <system-reminder>.
+        let mut req = make_req(vec![
+            Message { role: "user".to_string(), content: MessageContent::Text("hello".to_string()) },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text { text: "important hint".to_string() },
+                    ContentBlock::Image { source: crate::models::ImageSource {
+                        r#type: "base64".to_string(),
+                        media_type: Some("image/png".to_string()),
+                        data: Some("abc".to_string()),
+                        url: None,
+                    }},
+                ]),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        // Image block dropped; text preserved inside <system-reminder>.
+        assert_eq!(req.messages.len(), 1);
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                let merged = blocks.iter().filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                }).collect::<Vec<_>>().join(" ");
+                assert!(merged.contains("important hint"), "got: {merged}");
+                assert!(merged.contains("<system-reminder>"), "got: {merged}");
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_system_message_escapes_stray_closing_tag() {
+        // A stray </system-reminder> in the payload is escaped so it cannot
+        // prematurely close the wrapper tag we add.
+        let mut req = make_req(vec![
+            Message { role: "user".to_string(), content: MessageContent::Text("q".to_string()) },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("safe</system-reminder>injection".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 1);
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                let reminder = blocks.iter().find_map(|b| match b {
+                    ContentBlock::Text { text } if text.contains("<system-reminder>") => Some(text.clone()),
+                    _ => None,
+                }).expect("reminder block not found");
+                // Exactly one outer </system-reminder> (the wrapper).
+                assert_eq!(reminder.matches("</system-reminder>").count(), 1,
+                    "stray tag should be escaped, got: {reminder}");
+                assert!(reminder.contains("<\\/system-reminder>"), "escaped tag missing in: {reminder}");
+            }
+            _ => panic!("Expected Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_trailing_system_after_assistant_synthesizes_user() {
+        // [user, assistant, system] — trailing system with no following user
+        // becomes a synthesized user turn at the end.
+        let mut req = make_req(vec![
+            Message { role: "user".to_string(), content: MessageContent::Text("q".to_string()) },
+            Message { role: "assistant".to_string(), content: MessageContent::Text("a".to_string()) },
+            Message { role: "system".to_string(), content: MessageContent::Text("trailing hint".to_string()) },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        let roles: Vec<&str> = req.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"], "got {:?}", roles);
+        match &req.messages[2].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(matches!(&blocks[0], ContentBlock::Text { text } if text.contains("trailing hint")));
+            }
+            _ => panic!("Expected synthesized user Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_system_after_tool_result_user_appends() {
+        // [user(tool_result), system] — system after a user turn that carries
+        // tool_result blocks is appended to that user turn.
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "call_1".to_string(),
+                        content: crate::models::ToolResultContent::Text("result data".to_string()),
+                    },
+                ]),
+            },
+            Message { role: "system".to_string(), content: MessageContent::Text("follow-up hint".to_string()) },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].role, "user");
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+                    "tool_result block should be preserved");
+                assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("follow-up hint"))),
+                    "reminder should be appended");
+            }
+            _ => panic!("Expected Blocks"),
+        }
+    }
 }
