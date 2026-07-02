@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Admin UI checkbox block extracted to `renderMappingCheckboxes()` helper** — the strip-options checkbox group was duplicated four times; it is now a single function, eliminating ~80 lines of repetition.
 
-
+## [0.8.6-chy] - 2026-06-26
 
 ### Fixed
 - **OpenAI-compatible providers no longer crash on empty choices** — some upstreams (soft rate-limits, content filters) return HTTP 200 with an empty `choices` array. Previously this panicked the worker thread via `.expect()`. The proxy now returns a 502 error and falls back to the next provider in the chain.
