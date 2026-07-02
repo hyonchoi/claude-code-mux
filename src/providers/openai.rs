@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::{timeout, Duration, Instant};
 
 /// Official Codex instructions from OpenAI
@@ -755,7 +756,14 @@ impl OpenAIProvider {
             // Defense-in-depth: skip mid-conversation role:"system" messages
             // that may have slipped past normalization
             if msg.role == "system" {
-                tracing::warn!("🛡️ Dropping residual role:system message in OpenAI transform — normalize_mid_conversation_system may not have run for this mapping");
+                static RESIDUAL_DROPS: AtomicU64 = AtomicU64::new(0);
+                let count = RESIDUAL_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+                if count == 1 || count % 100 == 0 {
+                    tracing::warn!(
+                        residual_system_drops = count,
+                        "🛡️ Dropped residual role:system message(s) in OpenAI transform — normalize_mid_conversation_system may not have run for this mapping"
+                    );
+                }
                 continue;
             }
             match &msg.content {
