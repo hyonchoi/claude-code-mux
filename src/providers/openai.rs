@@ -12,8 +12,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::time::{timeout, Duration, Instant};
 
 /// Official Codex instructions from OpenAI
@@ -1687,8 +1687,10 @@ mod tests {
 
         let result = provider.transform_request(&request).unwrap();
         for msg in &result.messages {
-            assert_ne!(msg.role, "system",
-                "OpenAI messages should not contain role:system entries");
+            assert_ne!(
+                msg.role, "system",
+                "OpenAI messages should not contain role:system entries"
+            );
         }
     }
 }
