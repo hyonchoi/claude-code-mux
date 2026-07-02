@@ -119,6 +119,12 @@ pub struct ModelMapping {
     /// List of specific beta options to strip (overrides strip_beta_options if provided)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub strip_specific_beta: Vec<String>,
+    /// Normalize mid-conversation role:"system" messages (SessionStart hook
+    /// context from opus-4.8 / sonnet-5) into a user <system-reminder> block
+    /// before dispatch. Targets like sonnet-4.6 and non-Anthropic providers
+    /// reject role:"system" inside messages.
+    #[serde(default)]
+    pub strip_mid_conversation_system: bool,
 }
 
 impl ModelConfig {}

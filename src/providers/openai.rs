@@ -12,6 +12,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::time::{timeout, Duration, Instant};
 
@@ -752,6 +753,19 @@ impl OpenAIProvider {
 
         // Transform messages
         for msg in &request.messages {
+            // Defense-in-depth: skip mid-conversation role:"system" messages
+            // that may have slipped past normalization
+            if msg.role == "system" {
+                static RESIDUAL_DROPS: AtomicU64 = AtomicU64::new(0);
+                let count = RESIDUAL_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+                if count == 1 || count % 100 == 0 {
+                    tracing::warn!(
+                        residual_system_drops = count,
+                        "🛡️ Dropped residual role:system message(s) in OpenAI transform — normalize_mid_conversation_system may not have run for this mapping"
+                    );
+                }
+                continue;
+            }
             match &msg.content {
                 MessageContent::Text(text) => {
                     // Simple text message
@@ -1640,5 +1654,43 @@ mod tests {
         let transformed = provider.transform_responses_response(response);
         assert_eq!(transformed.usage.input_tokens, 0);
         assert_eq!(transformed.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_transform_request_skips_residual_system_role() {
+        let provider = make_provider();
+        let request = AnthropicRequest {
+            model: "test".to_string(),
+            messages: vec![
+                crate::models::Message {
+                    role: "user".to_string(),
+                    content: crate::models::MessageContent::Text("hello".to_string()),
+                },
+                crate::models::Message {
+                    role: "system".to_string(),
+                    content: crate::models::MessageContent::Text("leaked system msg".to_string()),
+                },
+            ],
+            max_tokens: 1024,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let result = provider.transform_request(&request).unwrap();
+        for msg in &result.messages {
+            assert_ne!(
+                msg.role, "system",
+                "OpenAI messages should not contain role:system entries"
+            );
+        }
     }
 }

@@ -5,6 +5,23 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7-chy] - 2026-07-02
+
+### Added
+- **`strip_mid_conversation_system` per-mapping flag** — when enabled, mid-conversation `role:"system"` messages (rejected by targets like claude-sonnet-4-6 and non-Anthropic providers) are converted to user `<system-reminder>` blocks before dispatch. Text content is preserved; empty system messages are silently dropped; non-text content blocks are logged but not preserved. Role alternation is always preserved: reminders fold into the adjacent user turn, and if no user turn is available a synthesized one is inserted. Opt in per mapping with `strip_mid_conversation_system = true` in your TOML config.
+- **Admin UI checkbox** — the new flag is exposed in all four mapping views (edit primary, edit fallback, add inline model, add separate model fallback).
+- **Defense-in-depth guard in OpenAI provider** — if a residual `role:"system"` entry reaches `transform_request` despite normalization, it is skipped with a warning log rather than forwarded to a provider that will reject it.
+
+### Fixed
+- **Role alternation preserved during normalization** — an earlier implementation could produce consecutive same-role turns when multiple system messages appeared without an adjacent user turn. The rewrite uses a pending buffer and synthesized user turns so the Anthropic alternation invariant is never violated.
+- **Messages restored correctly between fallback iterations** — the fallback provider loop now clones `original_messages` alongside `original_beta_header` so each retry starts from the pristine request, not from a partially-normalized one.
+- **Multiple leading system messages collapsed** — consecutive `role:"system"` turns at the start of the conversation (before the first user turn) are now merged into a single synthesized user turn instead of generating multiple consecutive user turns.
+- **Idempotence tightened for already-wrapped content** — a system message whose full content is a single well-formed `<system-reminder>` block is passed through untouched. Stray `</system-reminder>` tags inside the payload are escaped to prevent premature wrapper termination.
+- **Admin UI helper text HTML entities** — the "system-reminder" label in checkbox helper text was displaying raw `<` / `>` characters; they are now properly HTML-entity-escaped.
+
+### Changed
+- **Admin UI checkbox block extracted to `renderMappingCheckboxes()` helper** — the strip-options checkbox group was duplicated four times; it is now a single function, eliminating ~80 lines of repetition.
+
 ## [0.8.6-chy] - 2026-06-26
 
 ### Fixed

@@ -256,6 +256,8 @@ Depends on / blocked by:
 - None (can be fixed independently after the dialog refactor lands).
 
 ## [P1] Strip `role: "system"` Messages When Redirecting Across Models/Providers
+**Completed:** v0.8.7-chy (2026-07-02)
+
 What:
 When the mux redirects a request to a different model than the client targeted — a
 non-Anthropic provider, or a different Anthropic model (e.g. opus-4-8 -> sonnet-4-6,
@@ -269,6 +271,15 @@ block, and merge it into the nearest preceding user message (to preserve alterna
 then drop the `system` message. Do NOT hoist it to the top-level `system` field — it is
 turn-positional, and `system[]` blocks carry `cache_control:{ttl:1h}` that appended
 content would disturb.
+
+Implementation:
+- `normalize_mid_conversation_system()` in `src/server/mod.rs` — runs per-mapping before dispatch in `handle_messages`, `handle_openai_chat_completions`, and `handle_count_tokens`
+- `strip_mid_conversation_system` flag on `[[models.mappings]]` — opt-in per mapping
+- Role alternation preserved: orphans buffered and prepended to next user turn; synthesized user turn inserted when next turn is assistant/boundary
+- Defense-in-depth warning in `src/providers/openai.rs` — drops residual role:system with tracing::warn
+- `#[derive(PartialEq)]` added to message model types in `src/models/mod.rs` to support test assertions
+- Admin UI checkbox added to all mapping render views in `src/server/admin.html`
+- Unit tests: 7+ test cases covering merge, orphan prepend, multi-system, blocks content, empty system, stray closing tag, already-wrapped passthrough, count_tokens, role alternation, and OpenAI residual skip
 Why:
 Redirecting to a model/provider that rejects `role:"system"` yields a 400 and silently
 breaks the fallback/routing feature for these newer payload shapes.

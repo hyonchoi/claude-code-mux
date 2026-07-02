@@ -2919,18 +2919,7 @@ async function apiFetch(url, options = {}) {
                                         <input type="text" name="mappings[${index}][actual_model]" class="input-field font-mono" value="${escapeHtml(mapping.actual_model)}" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                                         <div class="helper-text">The actual model ID used by the provider</div>
                                     </div>
-                                    <div>
-                                        <label class="flex items-center gap-2 cursor-pointer">
-                                            <input type="checkbox" name="mappings[${index}][strip_beta_options]" class="rounded" ${mapping.strip_beta_options ? 'checked' : ''}>
-                                            <span class="font-medium">Strip all beta options</span>
-                                        </label>
-                                        <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
-                                    </div>
-                                    <div>
-                                        <label class="label">Specific beta options to strip</label>
-                                        <input type="text" name="mappings[${index}][strip_specific_beta]" class="input-field font-mono" value="${mapping.strip_specific_beta ? mapping.strip_specific_beta.join(', ') : ''}" placeholder="e.g., prompt-caching, interleaved-thinking">
-                                        <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
-                                    </div>
+                                    ${renderMappingCheckboxes(`mappings[${index}]`, mapping)}
                                 </div>
                             `;
                         } else {
@@ -2971,18 +2960,7 @@ async function apiFetch(url, options = {}) {
                                         <input type="text" name="mappings[${index}][actual_model]" class="input-field font-mono" value="${escapeHtml(mapping.actual_model)}" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                                         <div class="helper-text">The actual model ID used by the provider</div>
                                     </div>
-                                    <div>
-                                        <label class="flex items-center gap-2 cursor-pointer">
-                                            <input type="checkbox" name="mappings[${index}][strip_beta_options]" class="rounded" ${mapping.strip_beta_options ? 'checked' : ''}>
-                                            <span class="font-medium">Strip all beta options</span>
-                                        </label>
-                                        <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
-                                    </div>
-                                    <div>
-                                        <label class="label">Specific beta options to strip</label>
-                                        <input type="text" name="mappings[${index}][strip_specific_beta]" class="input-field font-mono" value="${mapping.strip_specific_beta ? mapping.strip_specific_beta.join(', ') : ''}" placeholder="e.g., prompt-caching, interleaved-thinking">
-                                        <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
-                                    </div>
+                                    ${renderMappingCheckboxes(`mappings[${index}]`, mapping)}
                                 </div>
                             `;
                         }
@@ -3041,18 +3019,7 @@ async function apiFetch(url, options = {}) {
                             <input type="text" name="mappings[0][actual_model]" class="input-field font-mono" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                             <div class="helper-text">The actual model ID used by the provider</div>
                         </div>
-                        <div>
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" name="mappings[0][strip_beta_options]" class="rounded">
-                                <span class="font-medium">Strip all beta options</span>
-                            </label>
-                            <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
-                        </div>
-                        <div>
-                            <label class="label">Specific beta options to strip</label>
-                            <input type="text" name="mappings[0][strip_specific_beta]" class="input-field font-mono" placeholder="e.g., prompt-caching, interleaved-thinking">
-                            <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
-                        </div>
+                        ${renderMappingCheckboxes('mappings[0]', null)}
                     </div>
                 </div>
             `;
@@ -3146,18 +3113,7 @@ async function apiFetch(url, options = {}) {
                         <input type="text" name="mappings[${priority - 1}][actual_model]" class="input-field font-mono" placeholder="e.g., claude-sonnet-4-5 or anthropic/claude-sonnet-4-5" required>
                         <div class="helper-text">The actual model ID used by the provider</div>
                     </div>
-                    <div>
-                        <label class="flex items-center gap-2 cursor-pointer">
-                            <input type="checkbox" name="mappings[${priority - 1}][strip_beta_options]" class="rounded">
-                            <span class="font-medium">Strip all beta options</span>
-                        </label>
-                        <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
-                    </div>
-                    <div>
-                        <label class="label">Specific beta options to strip</label>
-                        <input type="text" name="mappings[${priority - 1}][strip_specific_beta]" class="input-field font-mono" placeholder="e.g., prompt-caching, interleaved-thinking">
-                        <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
-                    </div>
+                    ${renderMappingCheckboxes(`mappings[${priority - 1}]`, null)}
                 </div>
             `;
 
@@ -3186,6 +3142,32 @@ async function apiFetch(url, options = {}) {
                     mapping.parentNode.insertBefore(next, mapping);
                     updateMappingPriorities();
                 }
+            }
+
+            function renderMappingCheckboxes(namePrefix, mapping) {
+                const stripBeta = mapping && mapping.strip_beta_options ? 'checked' : '';
+                const stripSpecific = mapping && mapping.strip_specific_beta ? escapeHtml(mapping.strip_specific_beta.join(', ')) : '';
+                const stripMidConvo = mapping && mapping.strip_mid_conversation_system ? 'checked' : '';
+                return `
+                        <div>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" name="${namePrefix}[strip_beta_options]" class="rounded" ${stripBeta}>
+                                <span class="font-medium">Strip all beta options</span>
+                            </label>
+                            <div class="helper-text">When enabled, removes all anthropic-beta headers from requests to this provider</div>
+                        </div>
+                        <div>
+                            <label class="label">Specific beta options to strip</label>
+                            <input type="text" name="${namePrefix}[strip_specific_beta]" class="input-field font-mono" value="${stripSpecific}" placeholder="e.g., prompt-caching, interleaved-thinking">
+                            <div class="helper-text">Comma-separated list of specific beta options to remove. Leave empty to use the checkbox above.</div>
+                        </div>
+                        <div>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" name="${namePrefix}[strip_mid_conversation_system]" class="rounded" ${stripMidConvo}>
+                                <span class="font-medium">Strip Mid-Conversation System</span>
+                            </label>
+                            <div class="helper-text">Normalize role:"system" messages to user &lt;system-reminder&gt; blocks</div>
+                        </div>`;
             }
 
             function updateMappingPriorities() {
@@ -3504,7 +3486,9 @@ async function apiFetch(url, options = {}) {
                             const stripSpecificBeta = stripSpecificBetaStr
                                 ? stripSpecificBetaStr.split(',').map(s => s.trim()).filter(s => s)
                                 : [];
-                            
+                            const stripMidConvoSystem = formData
+                                .get(`mappings[${index}][strip_mid_conversation_system]`) === "on";
+
                             if (provider && actualModel) {
                                 mappings.push({
                                     priority: index + 1,
@@ -3512,6 +3496,7 @@ async function apiFetch(url, options = {}) {
                                     actual_model: actualModel,
                                     strip_beta_options: stripBetaOptions,
                                     strip_specific_beta: stripSpecificBeta,
+                                    strip_mid_conversation_system: stripMidConvoSystem,
                                 });
                             }
                         });

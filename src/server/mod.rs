@@ -3,7 +3,7 @@ mod openai_compat;
 
 use crate::auth::TokenStore;
 use crate::cli::AppConfig;
-use crate::models::AnthropicRequest;
+use crate::models::{AnthropicRequest, ContentBlock, Message, MessageContent};
 use crate::providers::ProviderRegistry;
 use crate::router::Router;
 use axum::{
@@ -323,6 +323,162 @@ fn strip_beta_options_from_request(
             }
         }
     }
+}
+
+/// Merge a `<system-reminder>` block into an existing user turn's content.
+/// `append=true` places it after the turn's existing content (used when the
+/// reminder followed the user turn); `append=false` places it before (used
+/// when the reminder preceded the user turn), preserving chronological order.
+fn merge_reminder_into_user(content: &mut MessageContent, reminder: ContentBlock, append: bool) {
+    match content {
+        MessageContent::Text(existing) => {
+            let existing_block = ContentBlock::Text {
+                text: existing.clone(),
+            };
+            *content = MessageContent::Blocks(if append {
+                vec![existing_block, reminder]
+            } else {
+                vec![reminder, existing_block]
+            });
+        }
+        MessageContent::Blocks(blocks) => {
+            if append {
+                blocks.push(reminder);
+            } else {
+                blocks.insert(0, reminder);
+            }
+        }
+    }
+}
+
+/// Extract a `<system-reminder>` block from a mid-conversation `role:"system"`
+/// message. Returns `None` when there is no text content to carry (empty or
+/// non-text-only), in which case the system message is simply dropped.
+fn system_message_to_reminder(msg: &Message) -> Option<ContentBlock> {
+    let system_text = match &msg.content {
+        MessageContent::Text(t) => t.clone(),
+        MessageContent::Blocks(blocks) => {
+            let non_text = blocks
+                .iter()
+                .filter(|b| !matches!(b, ContentBlock::Text { .. }))
+                .count();
+            let text = blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if non_text > 0 {
+                info!("📝 Mid-conversation system message has {} non-text block(s) — not preserved in the normalized <system-reminder> block", non_text);
+            }
+            text
+        }
+    };
+
+    if system_text.trim().is_empty() {
+        info!("📝 Dropped mid-conversation system message with empty text content");
+        return None;
+    }
+
+    let trimmed = system_text.trim();
+    // Already a single well-formed reminder -> pass through untouched.
+    let already_wrapped = trimmed.starts_with("<system-reminder>")
+        && trimmed.ends_with("</system-reminder>")
+        && trimmed.matches("</system-reminder>").count() == 1;
+    let wrapped = if already_wrapped {
+        system_text
+    } else {
+        // Neutralize any stray closing tag in the content so it can't
+        // prematurely terminate the wrapper we are about to add.
+        let safe = system_text.replace("</system-reminder>", "<\\/system-reminder>");
+        format!("<system-reminder>\n{}\n</system-reminder>", safe)
+    };
+    Some(ContentBlock::Text { text: wrapped })
+}
+
+/// Normalize mid-conversation `role:"system"` messages into user-role
+/// `<system-reminder>` blocks. Targets like sonnet-4.6 and non-Anthropic
+/// providers reject `role:"system"` inside the `messages` array.
+///
+/// Each reminder is folded into the user turn it belongs to so the pass never
+/// introduces two consecutive same-role turns (which Anthropic-format targets
+/// reject with "roles must alternate"):
+///   - a system message directly after a user turn -> appended to that turn
+///   - otherwise the reminder is buffered and prepended to the NEXT user turn
+///   - if the next turn is not a user (assistant, or end of conversation) the
+///     buffered reminders become a synthesized user turn there, which keeps
+///     alternation valid between assistant turns and at boundaries
+fn normalize_mid_conversation_system(request: &mut AnthropicRequest) {
+    normalize_mid_conversation_system_messages(&mut request.messages);
+}
+
+/// Messages-level normalization shared by `AnthropicRequest` and
+/// `CountTokensRequest` (both carry `Vec<Message>`).
+fn normalize_mid_conversation_system_messages(messages: &mut Vec<Message>) {
+    let original = std::mem::take(messages);
+    let mut result: Vec<Message> = Vec::with_capacity(original.len());
+    // Reminders from orphan system messages (no preceding user turn to append
+    // to), waiting to attach to the next user turn.
+    let mut pending: Vec<ContentBlock> = Vec::new();
+
+    for msg in original {
+        if msg.role == "system" {
+            if let Some(reminder) = system_message_to_reminder(&msg) {
+                match result.last_mut() {
+                    // Directly after a user turn: append in place.
+                    Some(prev) if prev.role == "user" => {
+                        merge_reminder_into_user(&mut prev.content, reminder, true);
+                    }
+                    // No adjacent user turn: defer to the next one.
+                    _ => pending.push(reminder),
+                }
+                info!("📝 Normalized mid-conversation system message into user <system-reminder> block");
+            }
+            continue;
+        }
+
+        if msg.role == "user" && !pending.is_empty() {
+            // Prepend buffered reminders (in original order) before this user's
+            // content, then flush.
+            let mut user_msg = msg;
+            for reminder in pending.drain(..).rev() {
+                merge_reminder_into_user(&mut user_msg.content, reminder, false);
+            }
+            result.push(user_msg);
+            continue;
+        }
+
+        // Upcoming turn is not a user; materialize any buffered reminders as a
+        // synthesized user turn so alternation stays valid.
+        if !pending.is_empty() {
+            result.push(Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(std::mem::take(&mut pending)),
+            });
+        }
+        result.push(msg);
+    }
+
+    // Trailing reminders (system messages at the very end).
+    if !pending.is_empty() {
+        if let Some(last) = result.last_mut() {
+            if last.role == "user" {
+                for reminder in std::mem::take(&mut pending) {
+                    merge_reminder_into_user(&mut last.content, reminder, true);
+                }
+            }
+        }
+        if !pending.is_empty() {
+            result.push(Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(std::mem::take(&mut pending)),
+            });
+        }
+    }
+
+    *messages = result;
 }
 
 async fn refresh_provider_if_needed(
@@ -1383,8 +1539,9 @@ async fn handle_openai_chat_completions(
             sorted_mappings.sort_by_key(|m| m.priority);
         }
 
-        // Save original beta header to restore for each mapping attempt
+        // Save originals to restore for each mapping attempt (normalization mutates messages)
         let original_beta_header = anthropic_request.anthropic_beta_header.clone();
+        let original_messages = anthropic_request.messages.clone();
 
         // Try each mapping in priority order (or just the forced one)
         let mut fallback_failures = Vec::new();
@@ -1417,8 +1574,9 @@ async fn handle_openai_chat_completions(
                         None
                     };
 
-                // Restore original beta header before applying mapping-specific stripping
+                // Restore originals before applying mapping-specific transforms
                 anthropic_request.anthropic_beta_header = original_beta_header.clone();
+                anthropic_request.messages = original_messages.clone();
 
                 // Strip beta options if configured in the mapping
                 strip_beta_options_from_request(
@@ -1426,6 +1584,11 @@ async fn handle_openai_chat_completions(
                     mapping.strip_beta_options,
                     &mapping.strip_specific_beta,
                 );
+
+                // Normalize mid-conversation system messages if configured
+                if mapping.strip_mid_conversation_system {
+                    normalize_mid_conversation_system(&mut anthropic_request);
+                }
 
                 // Check if streaming is requested
                 let is_streaming = anthropic_request.stream == Some(true);
@@ -1701,6 +1864,13 @@ async fn handle_messages(
                 // Update system if modified during routing
                 anthropic_request.system = request_for_routing.system.clone();
 
+                // Normalize mid-conversation system messages if configured
+                // Must run AFTER the system reassignment so the final messages
+                // array state is what gets normalized
+                if mapping.strip_mid_conversation_system {
+                    normalize_mid_conversation_system(&mut anthropic_request);
+                }
+
                 if passthrough_token.is_some() {
                     info!(
                         "🔑 Passthrough auth active: original_model={}, target_provider={}",
@@ -1972,6 +2142,14 @@ async fn handle_count_tokens(
                         None
                     };
 
+                // Normalize mid-conversation system messages if configured
+                // (count_tokens has the same alternation requirement as generation)
+                if mapping.strip_mid_conversation_system {
+                    normalize_mid_conversation_system_messages(
+                        &mut count_request_for_provider.messages,
+                    );
+                }
+
                 // Call provider's count_tokens
                 match provider.count_tokens(count_request_for_provider).await {
                     Ok(response) => {
@@ -2169,6 +2347,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{AnthropicRequest, ContentBlock, Message, MessageContent};
     use crate::providers::ProviderConfig;
 
     #[test]
@@ -3094,5 +3273,641 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(run_request(make_app_state(None), req).await, StatusCode::OK);
+    }
+
+    // --- normalize_mid_conversation_system tests ---
+
+    fn make_req(msgs: Vec<Message>) -> AnthropicRequest {
+        AnthropicRequest {
+            model: "test".to_string(),
+            messages: msgs,
+            max_tokens: 1024,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        }
+    }
+
+    #[test]
+    fn test_normalize_single_system_message_merges_into_preceding_user() {
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("hook context".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.messages[0].role, "user");
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 2);
+                assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "hello"));
+                if let ContentBlock::Text { text } = &blocks[1] {
+                    assert!(text.contains("<system-reminder>"));
+                    assert!(text.contains("hook context"));
+                    assert!(text.contains("</system-reminder>"));
+                } else {
+                    panic!("Expected Text block for system-reminder");
+                }
+            }
+            _ => panic!("Expected Blocks content after merge"),
+        }
+        assert_eq!(req.messages[1].role, "assistant");
+    }
+
+    #[test]
+    fn test_normalize_system_message_no_preceding_user_prepends_user() {
+        let mut req = make_req(vec![
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("hook".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.messages[0].role, "user");
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                if let ContentBlock::Text { text } = &blocks[0] {
+                    assert!(text.contains("<system-reminder>"));
+                    assert!(text.contains("hook"));
+                    assert!(text.contains("</system-reminder>"));
+                } else {
+                    panic!("Expected Text block");
+                }
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_multiple_system_messages() {
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("first hook".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("second hook".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 2);
+        let all_text = match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => panic!("Expected Blocks"),
+        };
+        assert!(all_text.contains("first hook"));
+        assert!(all_text.contains("second hook"));
+    }
+
+    #[test]
+    fn test_normalize_blocks_content_system_message() {
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Blocks(vec![ContentBlock::Text {
+                    text: "block content".to_string(),
+                }]),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 2);
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                let reminder_text = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } if text.contains("<system-reminder>") => {
+                            Some(text.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                assert!(reminder_text.contains("block content"));
+            }
+            _ => panic!("Expected Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_no_system_messages_is_noop() {
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        let messages_before = req.messages.clone();
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages, messages_before);
+    }
+
+    #[test]
+    fn test_normalize_already_wrapped_is_idempotent() {
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text(
+                    "<system-reminder>already wrapped</system-reminder>".to_string(),
+                ),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        for msg in &req.messages {
+            match &msg.content {
+                MessageContent::Text(t) => {
+                    assert!(
+                        !t.contains("<system-reminder><system-reminder>"),
+                        "Should not double-wrap: {}",
+                        t
+                    );
+                }
+                MessageContent::Blocks(blocks) => {
+                    for b in blocks {
+                        if let ContentBlock::Text { text } = b {
+                            assert!(
+                                !text.contains("<system-reminder><system-reminder>"),
+                                "Should not double-wrap: {}",
+                                text
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_normalize_multiple_leading_system_messages_merge_into_single_user() {
+        // Multiple system messages before any user turn must collapse into ONE
+        // synthesized user turn, not multiple consecutive user turns.
+        let mut req = make_req(vec![
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("hook1".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("hook2".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(
+            req.messages.len(),
+            2,
+            "should be [user, assistant], not multiple user turns"
+        );
+        assert_eq!(req.messages[0].role, "user");
+        assert_eq!(req.messages[1].role, "assistant");
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(
+                    blocks.len(),
+                    2,
+                    "both system messages should be blocks in the same user turn"
+                );
+                for block in blocks {
+                    if let ContentBlock::Text { text } = block {
+                        assert!(text.contains("<system-reminder>"));
+                    } else {
+                        panic!("Expected Text blocks");
+                    }
+                }
+                // hook1 comes before hook2
+                if let ContentBlock::Text { text } = &blocks[0] {
+                    assert!(text.contains("hook1"));
+                }
+                if let ContentBlock::Text { text } = &blocks[1] {
+                    assert!(text.contains("hook2"));
+                }
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_empty_system_message_is_dropped() {
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 2);
+        match &req.messages[0].content {
+            MessageContent::Text(t) => assert_eq!(t, "hello"),
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 1),
+        }
+    }
+
+    #[test]
+    fn test_normalize_leading_system_then_user_merges_forward_preserves_alternation() {
+        // [system, user, assistant] must NOT become [user, user, assistant].
+        // The reminder merges forward into the following user turn.
+        let mut req = make_req(vec![
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("hook ctx".to_string()),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("real user msg".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("hi".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        let roles: Vec<&str> = req.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(
+            roles,
+            vec!["user", "assistant"],
+            "must preserve alternation, got {:?}",
+            roles
+        );
+        // Reminder precedes the user's real text (chronological order).
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 2);
+                if let ContentBlock::Text { text } = &blocks[0] {
+                    assert!(text.contains("<system-reminder>"));
+                    assert!(text.contains("hook ctx"));
+                } else {
+                    panic!("Expected reminder block first");
+                }
+                assert!(
+                    matches!(&blocks[1], ContentBlock::Text { text } if text == "real user msg")
+                );
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_no_two_consecutive_same_role_turns_invariant() {
+        // Exhaustive-ish shapes that previously produced consecutive same-role turns.
+        let shapes: Vec<Vec<(&str, &str)>> = vec![
+            vec![("system", "s"), ("user", "u"), ("assistant", "a")],
+            vec![
+                ("system", "s"),
+                ("system", "s2"),
+                ("user", "u"),
+                ("assistant", "a"),
+            ],
+            vec![
+                ("user", "u"),
+                ("assistant", "a"),
+                ("system", "s"),
+                ("user", "u2"),
+            ],
+            vec![
+                ("user", "u"),
+                ("assistant", "a"),
+                ("system", "s"),
+                ("assistant", "a2"),
+            ],
+            vec![("user", "u"), ("system", "s"), ("assistant", "a")],
+        ];
+        for shape in shapes {
+            let msgs = shape
+                .iter()
+                .map(|(role, text)| Message {
+                    role: role.to_string(),
+                    content: MessageContent::Text(text.to_string()),
+                })
+                .collect::<Vec<_>>();
+            let mut req = make_req(msgs);
+            normalize_mid_conversation_system(&mut req);
+            let roles: Vec<&str> = req.messages.iter().map(|m| m.role.as_str()).collect();
+            for w in req.messages.windows(2) {
+                assert_ne!(
+                    w[0].role, w[1].role,
+                    "consecutive same-role turns for shape {:?} -> {:?}",
+                    shape, roles
+                );
+            }
+            // No role:system may survive.
+            assert!(
+                req.messages.iter().all(|m| m.role != "system"),
+                "residual system role for shape {:?}",
+                shape
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_system_between_assistants_synthesizes_in_place() {
+        // [user, assistant, system, assistant] -> reminder becomes its own user
+        // turn between the two assistants, preserving alternation.
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("response".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("hook".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("follow-up".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        let roles: Vec<&str> = req.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(
+            roles,
+            vec!["user", "assistant", "user", "assistant"],
+            "got {:?}",
+            roles
+        );
+        // The synthesized user turn (index 2) carries the reminder.
+        match &req.messages[2].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("hook"))));
+            }
+            _ => panic!("Expected Blocks content for synthesized turn"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_system_after_assistant_merges_into_following_user_no_reorder() {
+        // [user, assistant, system, user] -> reminder attaches to the trailing
+        // user (its real neighbor), not yanked back before the assistant.
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("first".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("reply".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("hook".to_string()),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("second".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        let roles: Vec<&str> = req.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"], "got {:?}", roles);
+        // First user is untouched (no reorder into it).
+        assert!(matches!(&req.messages[0].content, MessageContent::Text(t) if t == "first"));
+        // Trailing user got the reminder prepended before its text.
+        match &req.messages[2].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(matches!(&blocks[0], ContentBlock::Text { text } if text.contains("hook")));
+                assert!(matches!(&blocks[1], ContentBlock::Text { text } if text == "second"));
+            }
+            _ => panic!("Expected Blocks content for trailing user"),
+        }
+    }
+
+    #[test]
+    fn test_strip_beta_options_still_works() {
+        let mut req = make_req(vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("hello".to_string()),
+        }]);
+        req.anthropic_beta_header = Some("max-tokens-3-5-sonnet-2024-07-15,other-beta".to_string());
+        strip_beta_options_from_request(&mut req, true, &[]);
+        assert!(req.anthropic_beta_header.is_none());
+    }
+
+    #[test]
+    fn test_normalize_system_message_with_non_text_blocks_drops_image() {
+        // Non-text blocks (e.g. image) in a system message are silently dropped;
+        // only text content survives in the <system-reminder>.
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text {
+                        text: "important hint".to_string(),
+                    },
+                    ContentBlock::Image {
+                        source: crate::models::ImageSource {
+                            r#type: "base64".to_string(),
+                            media_type: Some("image/png".to_string()),
+                            data: Some("abc".to_string()),
+                            url: None,
+                        },
+                    },
+                ]),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        // Image block dropped; text preserved inside <system-reminder>.
+        assert_eq!(req.messages.len(), 1);
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                let merged = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert!(merged.contains("important hint"), "got: {merged}");
+                assert!(merged.contains("<system-reminder>"), "got: {merged}");
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_system_message_escapes_stray_closing_tag() {
+        // A stray </system-reminder> in the payload is escaped so it cannot
+        // prematurely close the wrapper tag we add.
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("q".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("safe</system-reminder>injection".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 1);
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                let reminder = blocks
+                    .iter()
+                    .find_map(|b| match b {
+                        ContentBlock::Text { text } if text.contains("<system-reminder>") => {
+                            Some(text.clone())
+                        }
+                        _ => None,
+                    })
+                    .expect("reminder block not found");
+                // Exactly one outer </system-reminder> (the wrapper).
+                assert_eq!(
+                    reminder.matches("</system-reminder>").count(),
+                    1,
+                    "stray tag should be escaped, got: {reminder}"
+                );
+                assert!(
+                    reminder.contains("<\\/system-reminder>"),
+                    "escaped tag missing in: {reminder}"
+                );
+            }
+            _ => panic!("Expected Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_trailing_system_after_assistant_synthesizes_user() {
+        // [user, assistant, system] — trailing system with no following user
+        // becomes a synthesized user turn at the end.
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("q".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("a".to_string()),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("trailing hint".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        let roles: Vec<&str> = req.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"], "got {:?}", roles);
+        match &req.messages[2].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(
+                    matches!(&blocks[0], ContentBlock::Text { text } if text.contains("trailing hint"))
+                );
+            }
+            _ => panic!("Expected synthesized user Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_system_after_tool_result_user_appends() {
+        // [user(tool_result), system] — system after a user turn that carries
+        // tool_result blocks is appended to that user turn.
+        let mut req = make_req(vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "call_1".to_string(),
+                    content: crate::models::ToolResultContent::Text("result data".to_string()),
+                }]),
+            },
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text("follow-up hint".to_string()),
+            },
+        ]);
+        normalize_mid_conversation_system(&mut req);
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].role, "user");
+        match &req.messages[0].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(
+                    blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+                    "tool_result block should be preserved"
+                );
+                assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("follow-up hint"))),
+                    "reminder should be appended");
+            }
+            _ => panic!("Expected Blocks"),
+        }
     }
 }
