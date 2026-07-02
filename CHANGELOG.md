@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.7-chy] - 2026-07-02
 
 ### Added
-- **`strip_mid_conversation_system` per-mapping flag** — when enabled, mid-conversation `role:"system"` messages (rejected by targets like claude-sonnet-4-6 and non-Anthropic providers) are transparently converted to user `<system-reminder>` blocks before dispatch. Role alternation is always preserved: reminders fold into the adjacent user turn, and if no user turn is available a synthesized one is inserted. Opt in per mapping with `strip_mid_conversation_system = true` in your TOML config.
+- **`strip_mid_conversation_system` per-mapping flag** — when enabled, mid-conversation `role:"system"` messages (rejected by targets like claude-sonnet-4-6 and non-Anthropic providers) are converted to user `<system-reminder>` blocks before dispatch. Text content is preserved; empty system messages are silently dropped; non-text content blocks are logged but not preserved. Role alternation is always preserved: reminders fold into the adjacent user turn, and if no user turn is available a synthesized one is inserted. Opt in per mapping with `strip_mid_conversation_system = true` in your TOML config.
 - **Admin UI checkbox** — the new flag is exposed in all four mapping views (edit primary, edit fallback, add inline model, add separate model fallback).
 - **Defense-in-depth guard in OpenAI provider** — if a residual `role:"system"` entry reaches `transform_request` despite normalization, it is skipped with a warning log rather than forwarded to a provider that will reject it.
 

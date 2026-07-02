@@ -62,6 +62,7 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 - 📊 **Live Testing** - Built-in test interface to verify routing and responses
 - ⚙️ **Centralized Settings** - Dedicated Settings tab for regex pattern management
 - 🔑 **Bearer Token Passthrough** - Forward caller-provided authentication tokens to upstream providers (e.g., Claude Pro/Max via OAuth)
+- 🛡️ **Role Normalization** - Per-mapping `strip_mid_conversation_system` flag converts mid-conversation `role:"system"` messages (from opus-4.8/sonnet-5 payloads) into user `<system-reminder>` blocks for targets that reject that role. Role alternation is always preserved.
 
 ## Screenshots
 

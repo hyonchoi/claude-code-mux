@@ -256,7 +256,7 @@ Depends on / blocked by:
 - None (can be fixed independently after the dialog refactor lands).
 
 ## [P1] Strip `role: "system"` Messages When Redirecting Across Models/Providers
-**Completed:** v0.8.6-chy (2026-07-02)
+**Completed:** v0.8.7-chy (2026-07-02)
 
 What:
 When the mux redirects a request to a different model than the client targeted — a
