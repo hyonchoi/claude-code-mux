@@ -1050,10 +1050,9 @@ mod tests {
         // tests; this covers the third — is_oauth() (oauth_provider.is_some() &&
         // token_store.is_some()) — which was previously only exercised
         // indirectly through get_auth_header tests, never against is_bearer_auth().
-        let token_store = TokenStore::new(std::env::temp_dir().join(format!(
-            "ccm-test-oauth-tokens-{}.json",
-            std::process::id()
-        )))
+        let token_store = TokenStore::new(
+            std::env::temp_dir().join(format!("ccm-test-oauth-tokens-{}.json", std::process::id())),
+        )
         .unwrap();
 
         let provider = AnthropicCompatibleProvider::new(
