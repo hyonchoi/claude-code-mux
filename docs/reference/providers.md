@@ -9,6 +9,8 @@
 | `minimax` | Anthropic Messages | `https://api.minimax.io/anthropic` | api_key, passthrough |
 | `zenmux` | Anthropic Messages | `https://zenmux.ai/api/anthropic` | api_key, passthrough |
 | `kimi-coding` | Anthropic Messages | `https://api.kimi.com/coding` | api_key, passthrough |
+| `vllm` | Anthropic Messages | `http://localhost:8000` | api_key, passthrough |
+| `sglang` | Anthropic Messages | `http://localhost:30000` | api_key, passthrough |
 | `openai` | OpenAI Chat Completions / Responses | `https://api.openai.com/v1` | api_key, oauth, passthrough |
 | `nvidia-nim` | OpenAI Chat Completions | `https://integrate.api.nvidia.com/v1` | api_key, passthrough |
 | `openrouter` | OpenAI Chat Completions | `https://openrouter.ai/api/v1` | api_key, passthrough |
@@ -27,9 +29,11 @@
 
 ## Anthropic-format providers
 
-These speak the Anthropic Messages API natively, so `ccm` passes requests through without translation. The types are `anthropic`, `z.ai`, `minimax`, `zenmux`, and `kimi-coding`.
+These speak the Anthropic Messages API natively, so `ccm` passes requests through without translation. The types are `anthropic`, `z.ai`, `minimax`, `zenmux`, `kimi-coding`, `vllm`, and `sglang`.
 
 Only the `anthropic` type (when the provider name is `anthropic`) does real upstream token counting at `/v1/messages/count_tokens`. The others estimate token counts.
+
+`vllm` and `sglang` are Anthropic-compatible providers ([AnthropicCompatibleProvider](https://docs.anthropic.com/en/docs/ai-safety-and-controls/bedrock/bedrock-anthropic-compatible-api)). They connect to self-hosted vLLM (0.8+) and SGLang (0.4+) instances respectively. [vLLM docs](https://docs.vllm.com/). [SGLang docs](https://sgl-project.github.io/).
 
 ## OpenAI-format providers
 
