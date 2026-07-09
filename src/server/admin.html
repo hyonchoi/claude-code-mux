@@ -688,6 +688,42 @@
                                         <input
                                             type="radio"
                                             name="provider_type"
+                                            value="vllm"
+                                            class="peer sr-only"
+                                        />
+                                        <div
+                                            class="p-6 border-2 border-gray-200 rounded-xl peer-checked:border-blue-600 peer-checked:bg-blue-50 hover:border-gray-300 transition-all"
+                                        >
+                                            <div class="text-xl font-bold mb-1">
+                                                vLLM
+                                            </div>
+                                            <div class="text-sm text-gray-600">
+                                                Self-hosted vLLM engine
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="provider_type"
+                                            value="sglang"
+                                            class="peer sr-only"
+                                        />
+                                        <div
+                                            class="p-6 border-2 border-gray-200 rounded-xl peer-checked:border-blue-600 peer-checked:bg-blue-50 hover:border-gray-300 transition-all"
+                                        >
+                                            <div class="text-xl font-bold mb-1">
+                                                SGLang
+                                            </div>
+                                            <div class="text-sm text-gray-600">
+                                                Self-hosted SGLang engine
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="provider_type"
                                             value="nvidia-nim"
                                             class="peer sr-only"
                                         />
@@ -4211,6 +4247,14 @@ async function apiFetch(url, options = {}) {
                         baseUrlInput.placeholder = "https://integrate.api.nvidia.com/v1";
                         baseUrlHelper.textContent =
                             "Defaults to NVIDIA NIM Cloud API. Override only if you use a different endpoint.";
+                    } else if (providerType === "vllm") {
+                        baseUrlInput.placeholder = "http://localhost:8000";
+                        baseUrlHelper.textContent =
+                            "Defaults to http://localhost:8000. Override if your vLLM server runs on a different address.";
+                    } else if (providerType === "sglang") {
+                        baseUrlInput.placeholder = "http://localhost:30000";
+                        baseUrlHelper.textContent =
+                            "Defaults to http://localhost:30000. Override if your SGLang server runs on a different address.";
                     } else {
                         baseUrlInput.placeholder = "https://api.anthropic.com";
                         baseUrlHelper.textContent =
