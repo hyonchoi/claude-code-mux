@@ -112,23 +112,46 @@ impl ProviderRegistry {
                 ),
                 // NVIDIA NIM (Anthropic-compatible; supports both the hosted
                 // build.nvidia.com catalog and self-hosted NIM containers via base_url override)
-                "nvidia-nim" => Box::new(
-                    AnthropicCompatibleProvider::new_with_options_and_auth(
-                        config.name.clone(),
-                        api_key,
-                        config
-                            .base_url
-                            .clone()
-                            .unwrap_or_else(|| "https://integrate.api.nvidia.com".to_string()),
-                        config.models.clone(),
-                        config.auth_type.clone(),
-                        config.oauth_provider.clone(),
-                        token_store.clone(),
-                        config.supported_beta_options.clone(),
+                "nvidia-nim" => {
+                    let base_url = config
+                        .base_url
+                        .clone()
+                        .unwrap_or_else(|| "https://integrate.api.nvidia.com".to_string());
+                    // Pre-migration configs (OpenAI-compat era) required a trailing /v1;
+                    // send_message now appends /v1/messages itself, so a surviving /v1
+                    // suffix would double up into /v1/v1/messages and 404. Strip it so
+                    // upgrading users aren't silently broken by a stale config value.
+                    let base_url = if let Some(stripped) = base_url
+                        .strip_suffix("/v1")
+                        .or_else(|| base_url.strip_suffix("/v1/"))
+                    {
+                        tracing::warn!(
+                            "nvidia-nim base_url '{}' has a trailing /v1 left over from the pre-Anthropic-compat config; stripping it to avoid /v1/v1/messages. Update config to '{}' to silence this warning.",
+                            base_url,
+                            stripped
+                        );
+                        stripped.to_string()
+                    } else {
+                        base_url
+                    };
+                    Box::new(
+                        AnthropicCompatibleProvider::new_with_options_and_auth(
+                            config.name.clone(),
+                            api_key,
+                            base_url,
+                            config.models.clone(),
+                            config.auth_type.clone(),
+                            config.oauth_provider.clone(),
+                            token_store.clone(),
+                            config.supported_beta_options.clone(),
+                        )
+                        .with_header_style(AnthropicAuthHeaderStyle::Bearer)
+                        .with_rate_limit_config(
+                            config.rate_limit_rpm,
+                            config.rate_limit_max_wait_ms,
+                        ),
                     )
-                    .with_header_style(AnthropicAuthHeaderStyle::Bearer)
-                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
-                ),
+                }
                 "z.ai" => Box::new(
                     AnthropicCompatibleProvider::zai_with_auth(
                         api_key,
@@ -631,6 +654,83 @@ mod tests {
 
         let response = provider.send_message(request).await.unwrap();
         assert_eq!(response.model, "meta-llama-3.1-405b-instruct");
+        assert!(matches!(
+            response.content.as_slice(),
+            [ContentBlock::Text { text }] if text == "nim ok"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_nvidia_nim_strips_stale_v1_suffix_from_base_url() {
+        // Regression guard (found in red-team review): users upgrading from the
+        // pre-migration OpenAI-compat config had base_url ending in /v1. Without
+        // stripping, send_message's {base_url}/v1/messages would double up into
+        // /v1/v1/messages and 404. Confirm the registry normalizes this away.
+        use axum::{routing::post, Json, Router};
+        use tokio::net::TcpListener;
+
+        let app = Router::new().route(
+            "/v1/messages",
+            post(|| async {
+                Json(serde_json::json!({
+                    "id": "msg_nim_stale_v1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "nim ok"}],
+                    "model": "meta-llama-3.1-405b-instruct",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }))
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        // Stale config: base_url still carries the old required /v1 suffix.
+        let config = ProviderConfig {
+            name: "nvidia-nim".to_string(),
+            provider_type: "nvidia-nim".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some(format!("http://{addr}/v1")),
+            models: vec!["meta-llama-3.1-405b-instruct".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        let provider = registry.get_provider("nvidia-nim").unwrap();
+        let request = AnthropicRequest {
+            model: "meta-llama-3.1-405b-instruct".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let response = provider.send_message(request).await.unwrap();
         assert!(matches!(
             response.content.as_slice(),
             [ContentBlock::Text { text }] if text == "nim ok"
