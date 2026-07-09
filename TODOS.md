@@ -9,6 +9,53 @@
 - Persist VScode-SessionId/MachineId across proxy restarts (D9 from plan-eng-review outside-voice)
 
 
+## [P1] Qwen/vLLM Reasoning-Only Responses Cause Conversation Stop
+What:
+When Qwen3.6-27B (via vLLM `/v1/chat/completions`) generates output entirely inside
+thinking tags, vLLM's reasoning parser routes all tokens to the `reasoning` field,
+leaving `content: null` and `finish_reason: "stop"`. Claude Code receives a turn that
+ends with `end_turn` and displays "Cogitated for Ns" — the conversation halts until
+the user manually types `continue`.
+
+Why:
+Users see intermittent, unexplained pauses mid-conversation. The model has work to do
+(e.g. a pending tool call or follow-up message) but the turn ended prematurely, so
+Claude Code waits for input. The problem resolves after manual `continue` because the
+subsequent request elicits a response with non-empty `content`.
+
+Evidence:
+- 9 confirmed occurrences in `ccm.log` (all on streaming path for `qwen` provider,
+  `finish_reason: "stop"`, `content: null`, no `tool_calls`, substantial `reasoning`).
+- Non-streaming path (`openai.rs:972-973`) has reasoning→text fallback, but the
+  streaming path (`openai.rs:1431-1437`) is a raw SSE byte passthrough with no
+  transformation.
+
+Root cause:
+`send_message_stream` in `src/providers/openai.rs` passes through raw OpenAI SSE bytes
+without transforming them to Anthropic SSE format. When the upstream returns only
+`reasoning_content` deltas (no `content`), Claude Code interprets the stop as a natural
+turn end with no visible output.
+
+Fix options:
+1. **vLLM-side:** Disable reasoning parser for Qwen3.6-27B or tune thinking-tag detection
+   so not all output is captured as reasoning. Prevents empty `content` at source.
+2. **ccm streaming transform:** Implement the `TODO` at `openai.rs:1431` — transform
+   OpenAI SSE to Anthropic SSE so `reasoning_content` → thinking blocks and empty-content
+   stops are handled.
+3. **ccm non-streaming reasoning→thinking:** Convert reasoning fallback at
+   `openai.rs:972-973` to emit a `Thinking` content block instead of `Text`, so Claude
+   Code renders it correctly.
+
+Impact:
+Affects all conversations routed to Qwen/vLLM endpoints. Intermittent — occurs when the
+model's generation happens to produce output only inside thinking tags.
+
+Effort estimate:
+- Human team: S (option 1, vLLM config change)
+- CC+gstack: M (option 2, SSE transform implementation)
+Priority:
+- P1
+
 ## [P1] Rollback Control Contract For Passthrough Relay
 Resolved: 2026-05-19. See docs/contracts/rollback-contract.md.
 What:
