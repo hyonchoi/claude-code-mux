@@ -3950,4 +3950,45 @@ mod tests {
             "openai should not get passthrough"
         );
     }
+
+    #[test]
+    fn test_passthrough_auth_requires_passthrough_auth_type() {
+        use crate::providers::{AuthType, ProviderConfig};
+
+        fn build_config(name: &str, provider_type: &str, auth_type: AuthType) -> ProviderConfig {
+            ProviderConfig {
+                name: name.to_string(),
+                provider_type: provider_type.to_string(),
+                auth_type,
+                oauth_provider: None,
+                api_key: None,
+                base_url: None,
+                project_id: None,
+                location: None,
+                models: vec![],
+                enabled: Some(true),
+                supported_beta_options: vec![],
+                rate_limit_rpm: None,
+                rate_limit_max_wait_ms: None,
+            }
+        }
+
+        // vllm/sglang with ApiKey (default) should NOT get passthrough
+        let vllm_apikey = build_config("vllm-apikey", "vllm", AuthType::ApiKey);
+        let sglang_apikey = build_config("sglang-apikey", "sglang", AuthType::ApiKey);
+        let anthropic_apikey = build_config("anthropic-apikey", "anthropic", AuthType::ApiKey);
+
+        assert!(
+            !super::should_use_passthrough_auth(&[vllm_apikey.clone()], "vllm-apikey"),
+            "vllm with ApiKey should not get passthrough"
+        );
+        assert!(
+            !super::should_use_passthrough_auth(&[sglang_apikey.clone()], "sglang-apikey"),
+            "sglang with ApiKey should not get passthrough"
+        );
+        assert!(
+            !super::should_use_passthrough_auth(&[anthropic_apikey.clone()], "anthropic-apikey"),
+            "anthropic with ApiKey should not get passthrough"
+        );
+    }
 }
