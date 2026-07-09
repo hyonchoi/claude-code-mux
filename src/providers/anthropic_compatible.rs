@@ -27,6 +27,53 @@ pub enum AnthropicAuthHeaderStyle {
     Bearer,
 }
 
+/// Parse an upstream response body as `ProviderResponse`, tolerating a missing or
+/// malformed `usage` object. `ProviderResponse.usage` is a required (non-`Option`)
+/// field; some Anthropic-compatible backends (confirmed for NVIDIA NIM's OpenAI
+/// Chat Completions path, see CHANGELOG.md) omit usage entirely on some responses.
+/// Rather than failing the whole parse over a missing token count, default `usage`
+/// to `{input_tokens: 0, output_tokens: 0}` when absent or malformed.
+fn parse_provider_response(
+    response_text: &str,
+    provider_name: &str,
+) -> Result<ProviderResponse, ProviderError> {
+    let mut value: serde_json::Value = serde_json::from_str(response_text).map_err(|e| {
+        tracing::error!("Failed to parse {} response: {}", provider_name, e);
+        tracing::error!("Response body was: {}", response_text);
+        ProviderError::from(e)
+    })?;
+
+    let needs_default_usage = match value.get("usage") {
+        None => true,
+        Some(usage) => {
+            !usage.is_object()
+                || usage.get("input_tokens").and_then(|v| v.as_u64()).is_none()
+                || usage
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .is_none()
+        }
+    };
+
+    if needs_default_usage {
+        tracing::warn!(
+            "{} response missing/malformed usage field — defaulting to 0/0",
+            provider_name
+        );
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "usage".to_string(),
+                serde_json::json!({"input_tokens": 0, "output_tokens": 0}),
+            );
+        }
+    }
+
+    serde_json::from_value(value).map_err(|e| {
+        tracing::error!("Failed to parse {} response: {}", provider_name, e);
+        e.into()
+    })
+}
+
 /// Generic Anthropic-compatible provider
 /// Works with: Anthropic, OpenRouter, z.ai, Minimax, NVIDIA NIM, etc.
 /// Any provider that accepts Anthropic Messages API format
@@ -670,14 +717,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         tracing::debug!("{} provider response body: {}", self.name, response_text);
 
         // Try to parse the response (already in Anthropic format!)
-        let provider_response: ProviderResponse =
-            serde_json::from_str(&response_text).map_err(|e| {
-                tracing::error!("Failed to parse {} response: {}", self.name, e);
-                tracing::error!("Response body was: {}", response_text);
-                e
-            })?;
-
-        Ok(provider_response)
+        parse_provider_response(&response_text, &self.name)
     }
 
     async fn count_tokens(
@@ -1188,5 +1228,67 @@ mod tests {
             result,
             Err(ProviderError::RateLimitTimeout { .. })
         ));
+    }
+
+    #[test]
+    fn test_parse_provider_response_missing_usage_defaults_to_zero() {
+        // NVIDIA NIM (and potentially other Anthropic-compatible backends) has a
+        // confirmed history of omitting usage on some responses (CHANGELOG.md).
+        // A missing usage field must not fail the whole parse.
+        let body = serde_json::json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "some-model",
+            "stop_reason": "end_turn",
+        })
+        .to_string();
+
+        let response = parse_provider_response(&body, "nvidia-nim").unwrap();
+        assert_eq!(response.usage.input_tokens, 0);
+        assert_eq!(response.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_parse_provider_response_malformed_usage_defaults_to_zero() {
+        let body = serde_json::json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "some-model",
+            "stop_reason": "end_turn",
+            "usage": "not-an-object",
+        })
+        .to_string();
+
+        let response = parse_provider_response(&body, "nvidia-nim").unwrap();
+        assert_eq!(response.usage.input_tokens, 0);
+        assert_eq!(response.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_parse_provider_response_preserves_present_usage() {
+        let body = serde_json::json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "some-model",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 12, "output_tokens": 34},
+        })
+        .to_string();
+
+        let response = parse_provider_response(&body, "nvidia-nim").unwrap();
+        assert_eq!(response.usage.input_tokens, 12);
+        assert_eq!(response.usage.output_tokens, 34);
+    }
+
+    #[test]
+    fn test_parse_provider_response_invalid_json_still_errors() {
+        let result = parse_provider_response("not json", "nvidia-nim");
+        assert!(result.is_err());
     }
 }

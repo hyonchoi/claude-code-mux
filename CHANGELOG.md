@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Beta headers note for self-hosted providers** — documentation now warns that `AnthropicCompatibleProvider` injects default `anthropic-beta` headers, which self-hosted vLLM/SGLang endpoints may not recognize. No config option to suppress yet — requires a code fix.
 - **vLLM/SGLang auth header** — `provider_type = "vllm"` and `"sglang"` with `auth_type = "apikey"` now send `Authorization: Bearer <api_key>` instead of `x-api-key`. vLLM and SGLang authenticate the OpenAI way when started with `--api-key`, so the previous `x-api-key` header was rejected. Every other Anthropic-format provider (`anthropic`, `z.ai`, `minimax`, `zenmux`, `kimi-coding`) is unaffected and still sends `x-api-key`.
+- **`AnthropicCompatibleProvider` no longer hard-fails on a missing `usage` field** — some Anthropic-compatible backends (confirmed for NVIDIA NIM) omit `usage` on some responses. A missing or malformed `usage` object now defaults to `{input_tokens: 0, output_tokens: 0}` instead of failing the entire response parse. Affects all Anthropic-format providers (`anthropic`, `z.ai`, `minimax`, `zenmux`, `kimi-coding`, `vllm`, `sglang`, `nvidia-nim`).
 
 ## [0.8.7-chy] - 2026-07-02
 
