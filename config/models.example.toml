@@ -45,7 +45,7 @@ name = "vllm-local"
 provider_type = "vllm"
 # base_url = "http://localhost:8000"  # Default, override if running on different port/host
 # AnthropicCompatibleProvider appends /v1/messages automatically
-auth_type = "ApiKey"
+auth_type = "apikey"
 api_key = "none"  # Placeholder — self-hosted vLLM typically ignores this
 # supported_beta_options = []  # Uncomment to suppress default beta headers (vLLM may not recognize Claude-specific beta flags)
 models = ["qwen3.6-27b", "deepseek-r1-32b"]
@@ -57,7 +57,7 @@ name = "sglang-local"
 provider_type = "sglang"
 # base_url = "http://localhost:30000"  # Default, override if running on different port/host
 # AnthropicCompatibleProvider appends /v1/messages automatically
-auth_type = "ApiKey"
+auth_type = "apikey"
 api_key = "none"  # Placeholder — self-hosted SGLang typically ignores this
 # supported_beta_options = []  # Uncomment to suppress default beta headers
 models = ["qwen3.6-27b", "deepseek-r1-32b"]
