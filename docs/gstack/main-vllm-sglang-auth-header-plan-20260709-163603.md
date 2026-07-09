@@ -224,3 +224,355 @@ Synthesized from CEO + Eng review findings above.
 **VERDICT:** CEO + ENG CLEARED — ready to implement.
 
 NO UNRESOLVED DECISIONS
+
+---
+
+# Addendum: NVIDIA NIM Anthropic-Compatible Migration (added 2026-07-09, via /autoplan)
+
+## Rough plan (as given)
+
+"migrate nvidia-nim from openai-compatible to anthropic-compatible (I have confirmed,
+nvidia-nim supports anthropic api endpoints). with bearer auth."
+
+## Premise Gate (Phase 1, not auto-decided)
+
+**D1 asked directly:** the codebase's `nvidia-nim` provider_type defaults `base_url` to
+`https://integrate.api.nvidia.com/v1` — NVIDIA's *hosted* build.nvidia.com catalog, not
+a self-hosted NIM container. Public docs describe a native Anthropic `/v1/messages`
+endpoint only for self-hosted NIM; most guides for the hosted catalog use third-party
+adapters (LiteLLM) to bridge Anthropic→OpenAI, suggesting the hosted catalog has
+historically been OpenAI-only.
+
+**User response:** "I confirmed they support /v1/messages endpoint." Taken as ground
+truth for the specific model(s) the user tested. Premise gate: **PASSED for reachability**,
+but see User Challenge below — heterogeneity across NVIDIA's multi-model hosted catalog
+was not addressed by this confirmation and remains an open strategic question.
+
+## Phase 1: CEO Review (SELECTIVE EXPANSION, auto-decided except User Challenge)
+
+### Dual Voices (CEO — strategy challenge)
+
+**CLAUDE SUBAGENT (CEO — strategic independence):** Flagged the proposal as a
+lateral rewrite of a working, tested integration (5+ CHANGELOG entries, admin UI
+support, test-plan history since 2026-05) with no named capability gain over the
+current OpenAI-compat path. Unverified premise: NVIDIA's hosted catalog spans many
+heterogeneous backend models (Llama, Mistral, Nemotron, etc.), each potentially with
+different tool-calling/streaming maturity — one verified model does not establish
+catalog-wide `/v1/messages` parity. 6-month regret: a user on a different NIM-hosted
+model gets silently malformed tool calls/dropped content, misdiagnosed as "our bug."
+Recommended: spike-first with a committed request/response fixture, and/or an
+additive opt-in shape rather than a wholesale swap.
+
+**CODEX SAYS (CEO — strategy challenge):** Independently converged on the same
+critique. "The dangerous premise is: one hosted endpoint accepted one Anthropic-shaped
+request, therefore nvidia-nim should globally become Anthropic-compatible. That does
+not follow." Named the same alternatives: spike fixture, config-level opt-in
+(`provider_type = "nvidia-nim-anthropic"`), or fixing isolated OpenAI-compat gaps
+directly. Framed the strategic question as "what stable contract does `nvidia-nim`
+promise users?" — a wholesale swap breaks that contract for existing OpenAI-compat
+users.
+
+```
+CEO DUAL VOICES — CONSENSUS TABLE:
+═══════════════════════════════════════════════════════════════════
+  Dimension                            Claude   Codex   Consensus
+  ───────────────────────────────────── ──────── ─────── ──────────
+  1. Premises valid?                    Unverified at catalog scale  Same  CONFIRMED gap
+  2. Right problem to solve?            No named capability gain    Same  CONFIRMED gap
+  3. Scope calibration correct?         Additive opt-in, not swap   Same  CONFIRMED (both agree)
+  4. Alternatives sufficiently explored? No (gap, now fixed here)   Same  CONFIRMED gap, now fixed
+  5. Competitive/market risks covered?  N/A                         N/A   N/A
+  6. 6-month trajectory sound?          Only if additive + fixtures Same  CONFIRMED (with additive shape)
+═══════════════════════════════════════════════════════════════════
+```
+
+### USER CHALLENGE (not auto-decided — surfaced at final gate)
+
+**What the user asked for:** migrate `nvidia-nim` (the existing provider_type) from
+OpenAI-compatible to Anthropic-compatible, with bearer auth — i.e., change what
+`provider_type = "nvidia-nim"` does for existing users.
+
+**What both models recommend instead:** do NOT change the existing `"nvidia-nim"`
+provider_type's behavior. Add a new, separate, opt-in provider_type
+(`"nvidia-nim-anthropic"`) that existing users are not silently moved onto. Existing
+`nvidia-nim` configs keep working exactly as today (OpenAI-compat, unaffected).
+
+**Why:** NVIDIA's hosted catalog serves many different backend models with
+independently varying Anthropic-Messages-API fidelity (tool_use blocks, streaming
+event shapes, `usage` field presence — the last one has a *confirmed prior bug* in
+this exact codebase for the OpenAI-compat path per CHANGELOG.md). The user verified
+one model/endpoint combination works; that doesn't establish it for the catalog. A
+silent behavior change on `nvidia-nim` risks breaking already-configured users the
+moment they're on a NIM-hosted model that doesn't have full Anthropic parity, with no
+fallback short of a revert.
+
+**What context we might be missing:** the user may only ever use one specific
+NIM-hosted model, in which case the catalog-heterogeneity risk is moot for their case
+— but other `ccm` users configuring `nvidia-nim` with a different model would inherit
+the risk if the swap changes shared default behavior.
+
+**If we're wrong (i.e., a straight swap was actually fine), the cost of building the
+additive version instead is:** one extra provider_type string, one extra constructor
+function (~15 lines, mirrors `zai_with_auth`), and one extra registry match arm.
+Marginal cost is low; this is why both models recommend it regardless of whether the
+heterogeneity risk ever materializes.
+
+**Your call** — proceed with the additive shape (recommended by both models), or
+confirm you want the existing `nvidia-nim` provider_type's default behavior changed
+directly.
+
+**RESOLVED (user decision, 2026-07-09):** Direct swap. The user's original direction
+stands — change `provider_type = "nvidia-nim"` itself to construct
+`AnthropicCompatibleProvider` with `.with_header_style(Bearer)`, replacing the
+`OpenAIProvider` path entirely, rather than adding a separate opt-in provider_type.
+User has direct knowledge of which NIM-hosted model(s) they route to and accepted
+the catalog-heterogeneity risk both models flagged. Implementation Tasks below are
+updated to reflect this (T1/T2 now modify the existing `"nvidia-nim"` arm in place
+rather than adding a new one). The base_url bare-host fix, shared usage-field
+defensive parsing fix, and passthrough-auth exclusion findings apply unchanged
+regardless of shape and remain in scope.
+
+### NOT in scope
+- Verifying every NVIDIA NIM-hosted model's individual tool-use/streaming fidelity
+  against the Anthropic Messages spec — infeasible to test exhaustively; addressed
+  instead by keeping this additive/opt-in and defensive on parse (see Eng phase).
+- Removing or deprecating the existing OpenAI-compatible `nvidia-nim` path — out of
+  scope, no evidence it's broken for any currently-supported model.
+
+### What already exists
+- `AnthropicAuthHeaderStyle::{XApiKey, Bearer}` + `.with_header_style()` builder +
+  `is_bearer_auth()` helper already exist on `AnthropicCompatibleProvider`
+  (added by the vLLM/SGLang fix earlier on this branch) — the new provider needs zero
+  new auth-header plumbing, just `.with_header_style(Bearer)` at construction.
+- The `*_with_auth` per-vendor constructor pattern (`zai_with_auth`, `minimax_with_auth`,
+  `zenmux_with_auth`, `kimi_coding_with_auth`) is an established, low-risk template to
+  copy for `nvidia_nim_anthropic_with_auth`.
+- `count_tokens` already falls back to character-based estimation for every
+  non-`"anthropic"`-named instance (anthropic_compatible.rs:726) — no live
+  `/v1/messages/count_tokens` call is made for vllm/sglang/z.ai/minimax/zenmux/kimi
+  today, so the new nvidia-nim-anthropic instance inherits this safe default
+  automatically; no NIM-specific count_tokens verification needed.
+- `should_use_passthrough_auth` (server/mod.rs:1314) already deliberately excludes
+  z.ai/minimax/zenmux/kimi-coding from passthrough eligibility despite being
+  AnthropicCompatibleProvider-backed — the new type follows the same precedent
+  (excluded by default, not a new gap).
+
+## Phase 3: Eng Review (dual voices)
+
+### Architecture
+
+```
+registry.rs::from_configs match on provider_type:
+  "nvidia-nim"            (existing, unchanged) → OpenAIProvider   (default, OpenAI Chat Completions)
+  "nvidia-nim-anthropic"  (NEW)                 → AnthropicCompatibleProvider::nvidia_nim_anthropic_with_auth(...)
+                                                     .with_header_style(Bearer)
+                                                     .with_rate_limit_config(...)
+```
+Mirrors the existing `"z.ai"`/`"minimax"`/`"zenmux"`/`"kimi-coding"` arms exactly —
+one new match arm, one new constructor, zero changes to existing call sites.
+
+### Dual Voices (Eng — architecture challenge)
+
+**CLAUDE SUBAGENT (eng — independent review):** Architecture confirmed sound and
+consistent with the established pattern — low blast radius, one-arm addition.
+Flagged two concrete correctness risks from reading the actual code:
+(1) `AnthropicCompatibleProvider::send_message` builds the URL as
+`format!("{}/v1/messages", self.base_url)` — copying the existing `nvidia-nim`
+default base_url (`https://integrate.api.nvidia.com/v1`, which already ends in `/v1`)
+verbatim into the new constructor produces `.../v1/v1/messages` (guaranteed 404). The
+new constructor's default must be the bare host (`https://integrate.api.nvidia.com`),
+matching the z.ai/minimax/vllm convention. (2) `ProviderResponse.usage` is a
+*required*, non-`Option` `Usage{input_tokens: u32, output_tokens: u32}` struct with
+strict `serde_json::from_str` and zero defensive fallback. CHANGELOG.md confirms
+NVIDIA NIM's OpenAI Chat Completions path has *historically omitted the usage field
+entirely* (fixed there with `Option<OpenAIUsage>`). If any NIM-hosted model's
+Anthropic-compat response ever omits `usage`, this new path fails the *entire*
+response parse — strictly worse than the graceful zero-fallback behavior on the
+existing OpenAI-compat path.
+
+**CODEX SAYS (eng — architecture challenge):** Independently confirmed both findings
+by reading the same code paths, and extended finding (2): this is not NVIDIA-specific
+— it's a *latent, pre-existing bug in `AnthropicCompatibleProvider` shared by every
+backend it already serves* (z.ai/minimax/vllm/sglang/zenmux/kimi-coding), since
+`ProviderResponse.usage` has always been required. Recommended fixing it at the
+shared deserialization layer (map missing `usage` to zero) rather than only for the
+new NIM path — in blast radius of the file already being touched, low effort.
+Additional findings: (3) passthrough-auth exclusion should be explicit and tested,
+not incidental — `Authorization: Bearer <nvapi-key>` (header_style) is orthogonal to
+`AuthType::Passthrough` (whose token, forwarded or configured); conflating them risks
+a future change accidentally forwarding an unrelated caller token to NVIDIA. (4) Add
+a config example with the correct bare-host default so users don't confuse
+`nvidia-nim` (OpenAI-compat, `/v1`-suffixed default) with `nvidia-nim-anthropic`
+(Anthropic-compat, bare-host default).
+
+```
+ENG DUAL VOICES — CONSENSUS TABLE:
+═══════════════════════════════════════════════════════════════════
+  Dimension                            Claude   Codex   Consensus
+  ───────────────────────────────────── ──────── ─────── ──────────
+  1. Architecture sound?                Yes, one-arm addition   Yes  CONFIRMED
+  2. Test coverage sufficient?          Gap: URL/usage/passthrough tests missing  Same + broader scope  CONFIRMED gap, now planned
+  3. Performance risks addressed?       N/A (no perf surface)   N/A  CONFIRMED (no findings)
+  4. Security threats covered?          N/A                     Passthrough-token conflation risk  CONFIRMED, addressed below
+  5. Error paths handled?               usage-field hard-fail gap  Same, + shared-bug scope  CONFIRMED gap, now planned
+  6. Deployment risk manageable?        Additive, zero regression to existing nvidia-nim  Same  CONFIRMED
+═══════════════════════════════════════════════════════════════════
+```
+
+**Auto-decided (P2 boil lakes + P5 explicit):** Fix the `usage`-field strictness at
+the shared `AnthropicCompatibleProvider` response-parsing layer (not NIM-specific) —
+in blast radius of the file already being touched by this change, <1 day effort,
+benefits every existing backend (z.ai/minimax/vllm/sglang/zenmux/kimi-coding) for
+free. Codex's exact recommendation adopted: map a missing/malformed `usage` object to
+`Usage{0,0}` instead of hard-failing the whole response parse.
+
+**Auto-decided (P5 explicit):** New constructor `nvidia_nim_anthropic_with_auth`
+defaults `base_url` to `"https://integrate.api.nvidia.com"` (bare host, no `/v1`
+suffix) — matches z.ai/minimax/vllm convention, avoids the double-`/v1` bug.
+
+**Auto-decided (P3 pragmatic, matches existing precedent):** `nvidia-nim-anthropic`
+is excluded from `should_use_passthrough_auth`'s match arm — same treatment as
+z.ai/minimax/zenmux/kimi-coding. Add an explicit test asserting this, per Codex's
+finding, so a future broadening doesn't silently include it.
+
+### Section 3: Test Review
+```
+NEW CODEPATHS:
+  - registry.rs "nvidia-nim-anthropic" match arm
+  - anthropic_compatible.rs::nvidia_nim_anthropic_with_auth constructor
+  - AnthropicCompatibleProvider response parsing: usage-field tolerant fallback (shared fix)
+
+TEST COVERAGE:
+  [GAP] nvidia-nim-anthropic + ApiKey → sends Authorization: Bearer, not x-api-key   [Unit — assert via is_bearer_auth()]
+  [GAP] nvidia-nim-anthropic default base_url → posts to https://integrate.api.nvidia.com/v1/messages (not /v1/v1/messages)  [Unit — assert constructed URL, regression guard for the double-/v1 bug]
+  [GAP] existing "nvidia-nim" (OpenAI-compat) unaffected — still constructs OpenAIProvider, still hits /v1/chat/completions  [Unit — regression guard]
+  [GAP] AnthropicCompatibleProvider response missing `usage` field → parses successfully with Usage{0,0}, not a hard failure  [Unit — covers z.ai/minimax/vllm/sglang/zenmux/kimi-coding too, not just NIM]
+  [GAP] nvidia-nim-anthropic excluded from should_use_passthrough_auth (returns false even with auth_type=Passthrough configured)  [Unit, extends existing passthrough-eligibility test table]
+
+COVERAGE: 0/5 new paths tested today (all GAPS — this is the point of the fix)
+```
+
+### Section 7: Performance Review
+No new allocations, no new I/O, no new hot path. One additional `match` arm
+(compile-time dispatch) and one additional enum-tag check in the shared response
+parser. **No issues found.**
+
+### Test Plan Artifact
+Written to `~/.gstack/projects/9j-claude-code-mux/hyonchoi-feat-bearer-auth-type-nvidia-nim-anthropic-test-plan-20260709-171647.md`.
+
+### TODOS.md updates
+None — all identified work is in-scope and scheduled as Implementation Tasks below
+(the usage-field fix is in blast radius, not deferred).
+
+### Implementation Tasks
+Synthesized from CEO + Eng review findings above. **Updated per user decision:
+direct swap (Option B), not additive** — `provider_type = "nvidia-nim"` itself
+changes.
+
+- [ ] **T1 (P1, human: ~20min / CC: ~5min)** — anthropic_compatible.rs — Add
+  `nvidia_nim_with_auth(api_key, models, auth_type, token_store)` constructor
+  (Anthropic-compatible), default base_url `https://integrate.api.nvidia.com` (bare
+  host — NOT the current `/v1`-suffixed default, which would double up), mirroring
+  `zai_with_auth`
+  - Surfaced by: Eng dual voices — established pattern, double-`/v1` bug avoidance
+  - Files: `src/providers/anthropic_compatible.rs`
+  - Verify: `cargo test providers::anthropic_compatible`
+- [ ] **T2 (P1, human: ~10min / CC: ~2min)** — registry.rs — Change the existing
+  `"nvidia-nim"` match arm to call T1's constructor + `.with_header_style(Bearer)` +
+  `.with_rate_limit_config(...)`, replacing the current `OpenAIProvider`
+  construction entirely (direct swap, per user decision — see resolved User
+  Challenge above)
+  - Surfaced by: user decision (Option B) overriding CEO dual-voice recommendation
+  - Files: `src/providers/registry.rs`
+  - Verify: `cargo test providers::registry`
+- [ ] **T3 (P1, human: ~30min / CC: ~10min)** — anthropic_compatible.rs — Fix
+  `usage`-field strictness in response parsing: tolerate missing/malformed `usage`,
+  default to `Usage{0,0}` instead of hard-failing `serde_json::from_str` on the whole
+  response
+  - Surfaced by: Codex eng review — shared latent bug across all
+    AnthropicCompatibleProvider backends, not NIM-specific; confirmed via CHANGELOG.md
+    precedent (same bug class already fixed once for OpenAI-compat path). Now higher
+    priority given the direct swap puts `nvidia-nim` on this path unconditionally.
+  - Files: `src/providers/anthropic_compatible.rs`
+  - Verify: `cargo test providers::anthropic_compatible` (add a missing-usage fixture test)
+- [ ] **T4 (P1, human: ~20min / CC: ~5min)** — tests — Assert: bearer header sent,
+  correct default URL (`/v1/messages` not `/v1/v1/messages`), `usage` fallback,
+  passthrough exclusion. Update/replace the now-stale
+  `test_nvidia_nim_uses_openai_chat_completions_endpoint` test (registry.rs ~line
+  595) since `nvidia-nim` no longer uses OpenAI Chat Completions.
+  - Surfaced by: Eng dual voices consensus — GAPs identified in Section 3, plus
+    direct-swap requires updating the now-incorrect existing regression test
+  - Files: `src/providers/anthropic_compatible.rs`, `src/providers/registry.rs`, `src/server/mod.rs`
+  - Verify: `cargo test`
+- [ ] **T5 (P2, human: ~15min / CC: ~5min)** — config — Update
+  `config/templates/nvidia-nim.toml`, `config/default.example.toml`, and
+  `docs/reference/providers.md` (currently states `nvidia-nim` → "OpenAI Chat
+  Completions") to reflect the new bare-host `base_url` and Anthropic-compatible
+  behavior; note this is a **breaking change** for anyone with an explicit
+  `base_url = ".../v1"` override in their config (now double-`/v1`)
+  - Surfaced by: Codex eng review (discoverability) + direct-swap breaking-change risk
+  - Files: `config/templates/nvidia-nim.toml`, `config/default.example.toml`, `docs/reference/providers.md`
+  - Verify: manual review
+- [ ] **T6 (P2, human: ~5min / CC: ~2min)** — docs — Note the breaking behavior
+  change in CHANGELOG.md (existing `nvidia-nim` users on OpenAI-compat move to
+  Anthropic-compat on upgrade; anyone with an explicit `/v1`-suffixed `base_url`
+  override must drop the suffix)
+  - Surfaced by: repo convention + direct-swap breaking-change risk (bumped from P3
+    to P2 given this is no longer purely additive)
+  - Files: `CHANGELOG.md`
+  - Verify: manual review
+
+### Completion Summary
+```
++====================================================================+
+|            /autoplan REVIEW — COMPLETION SUMMARY (addendum)        |
++====================================================================+
+| CEO Review           | SELECTIVE EXPANSION; User Challenge resolved (direct swap)|
+| CEO Dual Voices      | Codex + Claude subagent, both recommended additive;       |
+|                       | user chose direct swap with full context                  |
+| Eng Review           | Architecture/Test/Perf sections run, 1 shared bug found  |
+| Eng Dual Voices      | Codex + Claude subagent, converged on all findings       |
+| Design Review        | SKIPPED — no UI scope detected                            |
+| DX Review            | Folded into Eng findings (naming/docs discoverability,    |
+|                       | T5/T6) rather than a separate dual-voice pass — P4 DRY,   |
+|                       | avoids duplicating Eng finding #6/#7 verbatim              |
+| NOT in scope          | written (2 items)                                          |
+| What already exists   | written (4 items)                                          |
+| TODOS.md updates      | none — all work scheduled as Implementation Tasks          |
+| Test plan artifact    | written to disk                                            |
+| Implementation Tasks  | 6 (5 P1/P2 mix, direct-swap shape — see updated T1-T6)      |
+| Unresolved decisions  | 0 — resolved by user                                       |
++====================================================================+
+```
+
+## GSTACK REVIEW REPORT (addendum)
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` (via autoplan) | Scope & strategy | 1 | RESOLVED (user: direct swap) | Both models recommended additive shape; user chose direct swap with full context |
+| Codex Review | `/codex review` (dual voice, both phases) | Independent 2nd opinion | 2 | CLEAR | Converged with Claude subagent both phases |
+| Eng Review | `/plan-eng-review` (via autoplan) | Architecture & tests (required) | 1 | CLEAR | 6 implementation tasks, 1 shared latent bug found (usage-field strictness) |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | SKIPPED | No UI scope |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | FOLDED INTO ENG | Naming/docs discoverability covered by T5/T6 |
+
+**CROSS-MODEL:** Claude subagent and Codex independently converged on the same
+critique in both phases without seeing each other's output — CEO phase (additive
+shape over direct swap) and Eng phase (double-`/v1` bug, usage-field strictness,
+passthrough exclusion) — high-confidence signal.
+
+**VERDICT:** ENG CLEARED. User Challenge RESOLVED — direct swap approved by user.
+Ready to implement per T1-T6 (updated for direct-swap shape).
+
+NO UNRESOLVED DECISIONS.
+
+<!-- AUTONOMOUS DECISION LOG (addendum) -->
+## Decision Audit Trail (NVIDIA NIM addendum)
+
+| # | Phase | Decision | Classification | Principle | Rationale | Rejected |
+|---|-------|----------|-----------------|-----------|-----------|----------|
+| 1 | CEO | Direct swap of existing `nvidia-nim` provider_type (user overrode both models' additive recommendation) | User Challenge (resolved by user, not auto-decided) | — | User has direct knowledge of which NIM-hosted model(s) they route to; accepted catalog-heterogeneity risk both models flagged | Additive `nvidia-nim-anthropic` provider_type |
+| 2 | Eng | New constructor defaults `base_url` to bare host `https://integrate.api.nvidia.com` | Mechanical | P5 explicit | Avoids double-`/v1` 404 bug; matches z.ai/minimax/vllm convention | Copying existing nvidia-nim's `/v1`-suffixed default |
+| 3 | Eng | Fix `usage`-field strictness in shared `AnthropicCompatibleProvider` response parser (not NIM-specific) | Taste (in-scope expansion) | P2 boil lakes | In blast radius of file already touched, <1 day effort, benefits all 6 existing backends | Scoping the fix to only the new NIM path |
+| 4 | Eng | Exclude `nvidia-nim-anthropic` from `should_use_passthrough_auth`, add explicit test | Mechanical | P3 pragmatic | Matches existing precedent (z.ai/minimax/zenmux/kimi-coding already excluded) | Adding it to the passthrough-eligible list |
+| 5 | CEO/Eng | DX review folded into Eng findings rather than a separate dual-voice phase | Mechanical | P4 DRY | Avoids duplicating Eng finding #6/#7 (naming/docs discoverability) verbatim | Full separate DX dual-voice phase |
+| 6 | Eng | `count_tokens` needs no NIM-specific handling | Mechanical | — | Already falls back to character estimation for all non-`"anthropic"`-named instances | Adding a live count_tokens call for NIM |
