@@ -8,6 +8,24 @@
 - X-Interaction-Id per-conversation UUID for Copilot provider (D8 from plan-eng-review)
 - Persist VScode-SessionId/MachineId across proxy restarts (D9 from plan-eng-review outside-voice)
 
+## [P3] Generalize Bearer-vs-x-api-key header style beyond vLLM/SGLang
+What:
+`AnthropicAuthHeaderStyle` (src/providers/anthropic_compatible.rs) currently has two
+variants, `XApiKey` (default) and `Bearer`, set via `.with_header_style()`. Only vLLM
+and SGLang opt into `Bearer` today.
+
+Why:
+The same OpenAI-convention Bearer-only auth requirement is confirmed in Ollama
+([ollama/ollama#16922](https://github.com/ollama/ollama/issues/16922)) and likely TGI.
+When `ccm` adds registry support for either, they'll need `.with_header_style(Bearer)`
+too — a one-line registry.rs change, not a new abstraction, since the enum already
+generalizes. Not built now (2026-07-09 /autoplan CEO+Eng review): no registry entries
+exist yet for Ollama/TGI, and broadening now would be speculative scope per both
+reviewing models.
+
+Context: see `docs/gstack/main-vllm-sglang-auth-header-plan-20260709-163603.md` for
+the full CEO/Eng review that produced this decision.
+
 
 ## [P1] Qwen/vLLM Reasoning-Only Responses Cause Conversation Stop
 What:
