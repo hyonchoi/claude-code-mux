@@ -1309,14 +1309,14 @@ start "" "{exe}" start --port {port}{config_arg}
 }
 
 /// Returns true if the named provider should receive passthrough auth.
-/// Only anthropic-type providers with auth_type=passthrough are eligible.
+/// Anthropic-type providers (including vLLM and SGLang) with auth_type=passthrough are eligible.
 /// Other providers (copilot, nvidia-nim, apikey/oauth anthropic) use their own auth.
 fn should_use_passthrough_auth(providers: &[crate::providers::ProviderConfig], name: &str) -> bool {
     providers
         .iter()
         .find(|p| p.name == name)
         .map(|p| {
-            p.provider_type == "anthropic"
+            matches!(p.provider_type.as_str(), "anthropic" | "vllm" | "sglang")
                 && matches!(p.auth_type, crate::providers::AuthType::Passthrough)
         })
         .unwrap_or(false)
@@ -3909,5 +3909,45 @@ mod tests {
             }
             _ => panic!("Expected Blocks"),
         }
+    }
+
+    #[test]
+    fn test_passthrough_auth_includes_vllm_sglang() {
+        use crate::providers::{AuthType, ProviderConfig};
+
+        fn build_config(name: &str, provider_type: &str) -> ProviderConfig {
+            ProviderConfig {
+                name: name.to_string(),
+                provider_type: provider_type.to_string(),
+                auth_type: AuthType::Passthrough,
+                oauth_provider: None,
+                api_key: None,
+                base_url: None,
+                project_id: None,
+                location: None,
+                models: vec![],
+                enabled: Some(true),
+                supported_beta_options: vec![],
+                rate_limit_rpm: None,
+                rate_limit_max_wait_ms: None,
+            }
+        }
+
+        let vllm = build_config("vllm-test", "vllm");
+        let sglang = build_config("sglang-test", "sglang");
+        let openai = build_config("openai-test", "openai");
+
+        assert!(
+            super::should_use_passthrough_auth(&[vllm.clone()], "vllm-test"),
+            "vllm with passthrough should be eligible"
+        );
+        assert!(
+            super::should_use_passthrough_auth(&[sglang.clone()], "sglang-test"),
+            "sglang with passthrough should be eligible"
+        );
+        assert!(
+            !super::should_use_passthrough_auth(&[openai.clone()], "openai-test"),
+            "openai should not get passthrough"
+        );
     }
 }
