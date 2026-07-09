@@ -583,6 +583,8 @@ Result: glm-4.6 (original model name, routed through model mappings)
 2. Configure the provider with your API key
 3. Route requests to NVIDIA NIM
 
+**⚠️ BREAKING CHANGE (2026-07)**: `provider_type = "nvidia-nim"` now routes through NVIDIA's Anthropic-compatible API (`/v1/messages`) instead of the OpenAI Chat Completions path. If you have an existing config with `base_url` ending in `/v1` (from before this change), drop the `/v1` suffix — the provider appends `/v1/messages` itself, so a `/v1`-suffixed URL will 404. The auto-correct safety net strips a trailing `/v1` with a warning log.
+
 **Configuration** (see `config/templates/nvidia-nim.toml` for full template):
 ```toml
 [[providers]]
