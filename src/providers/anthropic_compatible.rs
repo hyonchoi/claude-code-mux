@@ -31,8 +31,12 @@ pub enum AnthropicAuthHeaderStyle {
 /// malformed `usage` object. `ProviderResponse.usage` is a required (non-`Option`)
 /// field; some Anthropic-compatible backends (confirmed for NVIDIA NIM's OpenAI
 /// Chat Completions path, see CHANGELOG.md) omit usage entirely on some responses.
-/// Rather than failing the whole parse over a missing token count, default `usage`
-/// to `{input_tokens: 0, output_tokens: 0}` when absent or malformed.
+/// Rather than failing the whole parse over a missing token count, default each of
+/// `input_tokens`/`output_tokens` to 0 independently when absent or malformed —
+/// a response with `{"input_tokens": 500}` keeps the 500, only `output_tokens`
+/// gets defaulted, instead of the whole usage object being zeroed out (adversarial
+/// review flagged the earlier all-or-nothing version as silently destroying real
+/// token counts, which feeds directly into billing/quota reporting).
 fn parse_provider_response(
     response_text: &str,
     provider_name: &str,
@@ -43,27 +47,30 @@ fn parse_provider_response(
         ProviderError::from(e)
     })?;
 
-    let needs_default_usage = match value.get("usage") {
-        None => true,
-        Some(usage) => {
-            !usage.is_object()
-                || usage.get("input_tokens").and_then(|v| v.as_u64()).is_none()
-                || usage
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .is_none()
-        }
-    };
+    let usage_is_object = value.get("usage").is_some_and(|u| u.is_object());
+    let input_tokens = value
+        .get("usage")
+        .and_then(|u| u.get("input_tokens"))
+        .and_then(|v| v.as_u64());
+    let output_tokens = value
+        .get("usage")
+        .and_then(|u| u.get("output_tokens"))
+        .and_then(|v| v.as_u64());
 
-    if needs_default_usage {
+    if !usage_is_object || input_tokens.is_none() || output_tokens.is_none() {
         tracing::warn!(
-            "{} response missing/malformed usage field — defaulting to 0/0",
-            provider_name
+            "{} response missing/malformed usage field(s) — defaulting missing token counts to 0 (input_tokens={:?}, output_tokens={:?})",
+            provider_name,
+            input_tokens,
+            output_tokens
         );
         if let Some(obj) = value.as_object_mut() {
             obj.insert(
                 "usage".to_string(),
-                serde_json::json!({"input_tokens": 0, "output_tokens": 0}),
+                serde_json::json!({
+                    "input_tokens": input_tokens.unwrap_or(0),
+                    "output_tokens": output_tokens.unwrap_or(0)
+                }),
             );
         }
     }
@@ -1370,11 +1377,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_provider_response_usage_object_missing_subfields_defaults_to_zero() {
-        // Distinct from the "not-an-object" malformed case above: usage is a valid
-        // JSON object here, but missing output_tokens. needs_default_usage must
-        // still catch this via the .get("output_tokens") checks, not just the
-        // top-level !usage.is_object() check.
+    fn test_parse_provider_response_preserves_partial_usage_defaults_missing_field() {
+        // Regression guard (adversarial review): a usage object present but missing
+        // ONE field (e.g. output_tokens omitted mid-stream-to-non-stream fallback)
+        // must keep the field that IS present, not zero out the whole object —
+        // silently discarding a real input_tokens count would corrupt billing/quota
+        // reporting for a response that was mostly valid.
         let body = serde_json::json!({
             "id": "msg_1",
             "type": "message",
@@ -1387,8 +1395,28 @@ mod tests {
         .to_string();
 
         let response = parse_provider_response(&body, "nvidia-nim").unwrap();
-        assert_eq!(response.usage.input_tokens, 0);
+        assert_eq!(response.usage.input_tokens, 5);
         assert_eq!(response.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_parse_provider_response_preserves_output_tokens_when_input_missing() {
+        // Mirror of the above for the other field, proving the fix isn't
+        // input_tokens-specific.
+        let body = serde_json::json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "some-model",
+            "stop_reason": "end_turn",
+            "usage": {"output_tokens": 7},
+        })
+        .to_string();
+
+        let response = parse_provider_response(&body, "nvidia-nim").unwrap();
+        assert_eq!(response.usage.input_tokens, 0);
+        assert_eq!(response.usage.output_tokens, 7);
     }
 
     #[test]
