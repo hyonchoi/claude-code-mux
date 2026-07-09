@@ -162,6 +162,40 @@ impl ProviderRegistry {
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
 
+                // vLLM and SGLang (self-hosted, Anthropic-compatible)
+                "vllm" => Box::new(
+                    AnthropicCompatibleProvider::new_with_options_and_auth(
+                        config.name.clone(),
+                        api_key,
+                        config
+                            .base_url
+                            .clone()
+                            .unwrap_or_else(|| "http://localhost:8000".to_string()),
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        config.oauth_provider.clone(),
+                        token_store.clone(),
+                        config.supported_beta_options.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+                "sglang" => Box::new(
+                    AnthropicCompatibleProvider::new_with_options_and_auth(
+                        config.name.clone(),
+                        api_key,
+                        config
+                            .base_url
+                            .clone()
+                            .unwrap_or_else(|| "http://localhost:30000".to_string()),
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        config.oauth_provider.clone(),
+                        token_store.clone(),
+                        config.supported_beta_options.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+
                 // OpenAI-compatible providers
                 "openrouter" => Box::new(OpenAIProvider::openrouter(
                     config.name.clone(),
@@ -628,5 +662,77 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
         let registry = result.unwrap();
         assert!(registry.get_provider("my-copilot").is_some());
+    }
+
+    #[test]
+    fn test_vllm_provider_registration() {
+        let config = ProviderConfig {
+            name: "my-vllm".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None, // Use default: http://localhost:8000
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("my-vllm").is_some());
+    }
+
+    #[test]
+    fn test_sglang_provider_registration() {
+        let config = ProviderConfig {
+            name: "my-sglang".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None, // Use default: http://localhost:30000
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("my-sglang").is_some());
+    }
+
+    #[test]
+    fn test_vllm_with_custom_base_url() {
+        let config = ProviderConfig {
+            name: "vllm-remote".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some("http://10.0.0.5:8000".to_string()),
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(100),
+            rate_limit_max_wait_ms: Some(3000),
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("vllm-remote").is_some());
     }
 }
