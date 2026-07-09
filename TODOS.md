@@ -56,6 +56,42 @@ Effort estimate:
 Priority:
 - P1
 
+## [P2] vLLM / SGLang Native Provider With Anthropic-Compatible API
+What:
+Add dedicated vLLM and SGLang provider types that speak Anthropic-compatible API format
+instead of routing through the OpenAI-compatible `/v1/chat/completions` endpoint.
+Both engines now support Anthropic-format endpoints (`/v1/messages`) that natively
+emit Anthropic SSE events (thinking blocks, tool_use, text content) without an
+intermediate OpenAI translation layer.
+
+Why:
+The current OpenAI-compatible path has a raw SSE passthrough (`openai.rs:1431-1437`)
+that causes reasoning-only stops (see P1 entry above) and cannot properly translate
+reasoning content, tool calls, or usage metadata. A native Anthropic-compatible path
+eliminates the translation gap entirely.
+
+Pros:
+- No OpenAI↔Anthropic format conversion — zero translation bugs.
+- Thinking blocks, tool_use, text content arrive as proper Anthropic SSE events.
+- Reasoning parser no longer swallows all output into `reasoning_content`.
+- Proper streaming support (no raw byte passthrough).
+- Model cards, token usage, and finish_reasons arrive in native format.
+
+Cons:
+- Requires confirming Anthropic API compatibility for the specific vLLM/SGLang versions
+  in use (vLLM 0.8+, SGLang 0.4+ have `--api-prefix /v1` with Anthropic support).
+- Additional provider type in the config schema.
+
+Context:
+Related to P1 Qwen/vLLM reasoning-only responses — a native Anthropic path sidesteps
+that class of issue entirely.
+
+Effort estimate:
+- Human team: S (verify vLLM/SGLang Anthropic endpoint support + config)
+- CC+gstack: S (new provider type + routing, minimal — format is already Anthropic)
+Priority:
+- P2
+
 ## [P1] Rollback Control Contract For Passthrough Relay
 Resolved: 2026-05-19. See docs/contracts/rollback-contract.md.
 What:
