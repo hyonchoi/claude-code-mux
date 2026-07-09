@@ -57,6 +57,8 @@ Priority:
 - P1
 
 ## [P2] vLLM / SGLang Native Provider With Anthropic-Compatible API
+**Completed:** v0.8.8-chy (2026-07-09)
+
 What:
 Add dedicated vLLM and SGLang provider types that speak Anthropic-compatible API format
 instead of routing through the OpenAI-compatible `/v1/chat/completions` endpoint.

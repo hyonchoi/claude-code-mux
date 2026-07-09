@@ -51,7 +51,7 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 - 🧠 **Intelligent Routing** - Auto-route by task type (websearch, reasoning, background, default)
 - 🔄 **Provider Failover** - Automatic fallback to backup providers with priority-based routing
 - 🌊 **Streaming Support** - Full Server-Sent Events (SSE) streaming for real-time responses
-- 🌐 **Multi-Provider Support** - 18+ providers including OpenAI, Anthropic, Google Gemini/Vertex AI, Groq, ZenMux, etc.
+- 🌐 **Multi-Provider Support** - 20+ providers including OpenAI, Anthropic, Google Gemini/Vertex AI, Groq, vLLM, SGLang, ZenMux, etc.
 - ⚡️ **High Performance** - ~5MB RAM, <1ms routing overhead (Rust powered)
 - 🎯 **Unified API** - Full Anthropic Messages API compatibility
 
@@ -95,7 +95,7 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 
 **20+ AI providers with automatic format translation, streaming, and failover:**
 
-- **Anthropic-compatible**: Anthropic (API Key/OAuth), ZenMux, z.ai, Minimax, Kimi
+- **Anthropic-compatible**: Anthropic (API Key/OAuth), ZenMux, z.ai, Minimax, Kimi, vLLM, SGLang
 - **OpenAI-compatible**: OpenAI, OpenRouter, Groq, Together, Fireworks, Deepinfra, Cerebras, Moonshot, Nebius, NovitaAI, Baseten
 - **GPU/Edge**: NVIDIA NIM (cloud API or self-hosted)
 - **Google AI**: Gemini (OAuth/API Key), Vertex AI (GCP ADC)
@@ -110,6 +110,8 @@ Claude Code → Claude Code Mux → Multiple AI Providers
 - **z.ai** - China-based, GLM models
 - **Minimax** - China-based, MiniMax-M2 model
 - **Kimi For Coding** - Premium membership for Kimi
+- **vLLM** - Self-hosted vLLM 0.8+ with Anthropic-compatible API (`/v1/messages`)
+- **SGLang** - Self-hosted SGLang 0.4+ with Anthropic-compatible API (`/v1/messages`)
 
 ### OpenAI-Compatible
 - **OpenAI** - Official OpenAI API (supports both API Key and OAuth)
@@ -330,7 +332,7 @@ Navigate to **Providers** tab → Click **"Add Provider"**
 > **Note**: Vertex AI uses Application Default Credentials (ADC). Make sure you've run `gcloud auth application-default login` first.
 
 **Supported Providers**:
-- Anthropic-compatible: Anthropic (API Key or OAuth), ZenMux, z.ai, Minimax, Kimi
+- Anthropic-compatible: Anthropic (API Key or OAuth), ZenMux, z.ai, Minimax, Kimi, vLLM, SGLang
 - OpenAI-compatible: OpenAI, OpenRouter, Groq, Together, Fireworks, Deepinfra, Cerebras, Nebius, NovitaAI, Baseten
 - Google AI: Gemini (OAuth/API Key), Vertex AI (GCP ADC)
 
