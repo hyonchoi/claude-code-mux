@@ -1036,6 +1036,31 @@ mod tests {
         assert!(!provider.is_bearer_auth());
     }
 
+    #[test]
+    fn test_oauth_provider_forces_bearer_auth_regardless_of_header_style() {
+        // is_bearer_auth() ORs three conditions: Passthrough, OAuth, or explicit
+        // Bearer header_style. Passthrough and header_style each have dedicated
+        // tests; this covers the third — is_oauth() (oauth_provider.is_some() &&
+        // token_store.is_some()) — which was previously only exercised
+        // indirectly through get_auth_header tests, never against is_bearer_auth().
+        let token_store = TokenStore::new(std::env::temp_dir().join(format!(
+            "ccm-test-oauth-tokens-{}.json",
+            std::process::id()
+        )))
+        .unwrap();
+
+        let provider = AnthropicCompatibleProvider::new(
+            "copilot-test".to_string(),
+            "unused-api-key".to_string(),
+            "https://api.githubcopilot.com".to_string(),
+            vec![],
+            Some("copilot".to_string()),
+            Some(token_store),
+        );
+
+        assert!(provider.is_bearer_auth());
+    }
+
     #[tokio::test]
     async fn test_passthrough_auth_stays_bearer_regardless_of_header_style() {
         // header_style is irrelevant once auth_type is Passthrough — the caller's
@@ -1336,6 +1361,28 @@ mod tests {
             "model": "some-model",
             "stop_reason": "end_turn",
             "usage": "not-an-object",
+        })
+        .to_string();
+
+        let response = parse_provider_response(&body, "nvidia-nim").unwrap();
+        assert_eq!(response.usage.input_tokens, 0);
+        assert_eq!(response.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_parse_provider_response_usage_object_missing_subfields_defaults_to_zero() {
+        // Distinct from the "not-an-object" malformed case above: usage is a valid
+        // JSON object here, but missing output_tokens. needs_default_usage must
+        // still catch this via the .get("output_tokens") checks, not just the
+        // top-level !usage.is_object() check.
+        let body = serde_json::json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "some-model",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5},
         })
         .to_string();
 
