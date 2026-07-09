@@ -359,6 +359,39 @@ Priority:
 Depends on / blocked by:
 - None (can be fixed independently after the dialog refactor lands).
 
+## [P2] Reject `auth_type = "passthrough"` at Config Load for Providers That Can't Use It
+What:
+`should_use_passthrough_auth()` in `src/server/mod.rs` only extracts and forwards the
+caller's token for `provider_type` in `{anthropic, vllm, sglang}`. Providers outside that
+set (`nvidia-nim`, `copilot`, etc.) can still be configured with `auth_type = "passthrough"`
+at load time — `ProviderRegistry::from_configs()` accepts it silently. At request time,
+`get_auth_header()` then always receives `override_auth: None` for these providers (the
+server never threads a token through), so every single request fails with
+`AuthError("Passthrough auth requires token from request headers")`.
+Why:
+This is a config-time mistake that should be a config-time error, not a 100%-request-failure-rate
+runtime surprise. Found during adversarial review of the nvidia-nim Anthropic-compatible
+migration (2026-07-09) — pre-existing gap (the passthrough exclusion of nvidia-nim predates
+that migration), not introduced by it, so it wasn't fixed inline to avoid scope creep on that PR.
+Pros:
+- Fails fast at startup with a clear config error instead of opaque per-request auth failures.
+- Small, targeted validation — no architecture change.
+Cons:
+- Needs to enumerate the passthrough-eligible provider_type set in one place shared between
+  registry.rs (validation) and server/mod.rs's should_use_passthrough_auth() (enforcement),
+  or they'll drift again when a new provider type is added.
+Context:
+Raised by Codex adversarial review during /ship on branch feat/bearer-auth-type
+(2026-07-09), see `src/server/mod.rs` `should_use_passthrough_auth()` and
+`src/providers/registry.rs` `from_configs()`.
+Effort estimate:
+- Human team: S
+- CC+gstack: XS
+Priority:
+- P2
+Depends on / blocked by:
+- None.
+
 ## [P1] Strip `role: "system"` Messages When Redirecting Across Models/Providers
 **Completed:** v0.8.7-chy (2026-07-02)
 
