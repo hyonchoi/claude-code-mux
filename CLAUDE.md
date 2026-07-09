@@ -88,59 +88,21 @@ See `@docs/localstorage-state-management.md` for detailed documentation.
 
 **UIKit 3** is loaded via CDN (`uikit@3/dist/js/uikit.min.js`). Use `UIkit.modal.confirm()` / `UIkit.modal.prompt()` for dialogs and `UIkit.notification()` for toasts. Never use native `alert()`, `confirm()`, or `prompt()`.
 
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+## Document management for gstack and superpowers
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
+### Commit the docs on finalized.
 
-### When to use graph tools FIRST
+md files under `docs/gstack/**` and `docs/superpowers/**` must commit on finalize.
 
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
+Commit the md files when:
 
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+- Changed to APPROVED in /office-hours gstack skill
+- Finalized after plan-eng-review or autoplan gstack skill
+- Finalized after writing-plan superpowers skill
 
-### Key Tools
+## gstack project folder reference
 
-| Tool | Use when |
-| ------ | ---------- |
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
+`docs/gstack` is the canonical project document folder. gstack skills resolve a project
+`<slug>` (e.g. `claude-code-mux`) and look for `~/.gstack/projects/<slug>`.
+If that path doesn't exist, create it as a symlink pointing to `docs/gstack`.
 
-### Workflow
-
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
-
-## Skill routing
-
-When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
-
-Key routing rules:
-- Product ideas/brainstorming → invoke /office-hours
-- Strategy/scope → invoke /plan-ceo-review
-- Architecture → invoke /plan-eng-review
-- Design system/plan review → invoke /design-consultation or /plan-design-review
-- Full review pipeline → invoke /autoplan
-- Bugs/errors → invoke /investigate
-- QA/testing site behavior → invoke /qa or /qa-only
-- Code review/diff check → invoke /review
-- Visual polish → invoke /design-review
-- Ship/deploy/PR → invoke /ship or /land-and-deploy
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore

@@ -1,3 +1,20 @@
+
+.superpowers/
+.claude/worktrees/
+
+# ---- Gstack / Gbrain ----
+# Ignore operational and machine-specific gstack/gbrain operational noise
+docs/gstack/**/brain-cache/
+docs/gstack/**/*.json
+docs/gstack/**/*.jsonl
+docs/gstack/**/.gbrain-*
+
+# Only allow tracking of human-readable documentation and plans
+!docs/gstack/**/*.md
+
+# Transient autoplan/skill recovery artifacts (backups, not deliverables)
+docs/gstack/**/*-autoplan-restore-*.md
+
 # Rust
 /target
 Cargo.lock
