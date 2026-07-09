@@ -572,10 +572,10 @@ Result: glm-4.6 (original model name, routed through model mappings)
 
 ### NVIDIA NIM Cloud API
 
-**Use Case**: Access state-of-the-art open-source models (Llama, Mistral) via NVIDIA's OpenAI-compatible cloud API with fallback to other providers.
+**Use Case**: Access state-of-the-art open-source models (Llama, Mistral) via NVIDIA's Anthropic-compatible cloud API with fallback to other providers.
 
 **Providers**:
-- NVIDIA NIM (cloud API, free tier available, OpenAI-compatible)
+- NVIDIA NIM (cloud API, free tier available, Anthropic-compatible `/v1/messages`, authenticates via `Authorization: Bearer <api_key>`)
 - Anthropic (fallback for when NIM is unavailable)
 
 **Setup**:
@@ -590,8 +590,8 @@ name = "nvidia-nim"
 provider_type = "nvidia-nim"
 # Get your free API key from https://build.nvidia.com/
 api_key = "your-nvidia-nim-api-key-here"
-# NVIDIA's cloud endpoint
-base_url = "https://integrate.api.nvidia.com/v1"
+# NVIDIA's cloud endpoint (bare host — ccm appends /v1/messages itself, do not add /v1)
+base_url = "https://integrate.api.nvidia.com"
 enabled = true
 # Rate limit: 40 requests per minute (provider-level enforcement)
 rate_limit_rpm = 40

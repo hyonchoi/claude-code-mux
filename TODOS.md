@@ -8,11 +8,12 @@
 - X-Interaction-Id per-conversation UUID for Copilot provider (D8 from plan-eng-review)
 - Persist VScode-SessionId/MachineId across proxy restarts (D9 from plan-eng-review outside-voice)
 
-## [P3] Generalize Bearer-vs-x-api-key header style beyond vLLM/SGLang
+## [P3] Generalize Bearer-vs-x-api-key header style beyond vLLM/SGLang/nvidia-nim
 What:
 `AnthropicAuthHeaderStyle` (src/providers/anthropic_compatible.rs) currently has two
-variants, `XApiKey` (default) and `Bearer`, set via `.with_header_style()`. Only vLLM
-and SGLang opt into `Bearer` today.
+variants, `XApiKey` (default) and `Bearer`, set via `.with_header_style()`. vLLM,
+SGLang, and (as of the nvidia-nim Anthropic-compatible migration) `nvidia-nim` opt
+into `Bearer` today.
 
 Why:
 The same OpenAI-convention Bearer-only auth requirement is confirmed in Ollama
