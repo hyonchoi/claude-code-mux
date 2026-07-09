@@ -1231,6 +1231,81 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn test_send_message_stream_sends_bearer_auth_header() {
+        // Regression guard: send_message_stream() duplicates the header-selection
+        // logic in send_message() (is_bearer_auth() branch). Confirm the streaming
+        // path actually sends the Bearer header on the wire, not just that the
+        // non-streaming path does.
+        use axum::{http::HeaderMap, routing::post, Router};
+        use std::sync::{Arc, Mutex};
+        use tokio::net::TcpListener;
+
+        let captured_auth = Arc::new(Mutex::new(None::<String>));
+        let captured_auth_clone = captured_auth.clone();
+
+        let app = Router::new().route(
+            "/v1/messages",
+            post(move |headers: HeaderMap| {
+                let captured = captured_auth_clone.clone();
+                async move {
+                    *captured.lock().unwrap() = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    "event: message_stop\ndata: {}\n\n"
+                }
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let provider = AnthropicCompatibleProvider::new(
+            "vllm-stream-test".to_string(),
+            "internal-api-key".to_string(),
+            format!("http://{addr}"),
+            vec![],
+            None,
+            None,
+        )
+        .with_header_style(AnthropicAuthHeaderStyle::Bearer);
+
+        let request = AnthropicRequest {
+            model: "qwen2.5-72b".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: Some(true),
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let stream = provider.send_message_stream(request).await.unwrap();
+        // Drain the stream so the request actually completes on the mock server.
+        use futures::stream::StreamExt;
+        let _ = stream.collect::<Vec<_>>().await;
+
+        assert_eq!(
+            captured_auth.lock().unwrap().as_deref(),
+            Some("Bearer internal-api-key")
+        );
+    }
+
     #[test]
     fn test_parse_provider_response_missing_usage_defaults_to_zero() {
         // NVIDIA NIM (and potentially other Anthropic-compatible backends) has a

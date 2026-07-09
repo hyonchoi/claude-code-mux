@@ -1127,6 +1127,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_vllm_sends_bearer_auth_header() {
+        // Regression guard: vllm's registry arm added .with_header_style(Bearer)
+        // (self-hosted vLLM run with --api-key expects Authorization: Bearer, not
+        // x-api-key). Confirm the actual outbound header, not just registration.
+        use axum::{http::HeaderMap, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+        use tokio::net::TcpListener;
+
+        let captured_auth = Arc::new(Mutex::new(None::<String>));
+        let captured_auth_clone = captured_auth.clone();
+
+        let app = Router::new().route(
+            "/v1/messages",
+            post(move |headers: HeaderMap| {
+                let captured = captured_auth_clone.clone();
+                async move {
+                    *captured.lock().unwrap() = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    Json(serde_json::json!({
+                        "id": "msg_vllm_2",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "model": "qwen2.5-72b",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1}
+                    }))
+                }
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let config = ProviderConfig {
+            name: "vllm-auth-test".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("vllm-test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some(format!("http://{addr}")),
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        let provider = registry.get_provider("vllm-auth-test").unwrap();
+        let request = AnthropicRequest {
+            model: "qwen2.5-72b".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        provider.send_message(request).await.unwrap();
+        assert_eq!(
+            captured_auth.lock().unwrap().as_deref(),
+            Some("Bearer vllm-test-key")
+        );
+    }
+
+    #[tokio::test]
     async fn test_sglang_provider_uses_anthropic_messages_endpoint() {
         use axum::{routing::post, Json, Router};
         use tokio::net::TcpListener;
@@ -1198,5 +1284,91 @@ mod tests {
             response.content.as_slice(),
             [ContentBlock::Text { text }] if text == "sglang response"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_sglang_sends_bearer_auth_header() {
+        // Regression guard: sglang's registry arm added .with_header_style(Bearer)
+        // (self-hosted SGLang run with --api-key expects Authorization: Bearer,
+        // not x-api-key). Confirm the actual outbound header, not just registration.
+        use axum::{http::HeaderMap, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+        use tokio::net::TcpListener;
+
+        let captured_auth = Arc::new(Mutex::new(None::<String>));
+        let captured_auth_clone = captured_auth.clone();
+
+        let app = Router::new().route(
+            "/v1/messages",
+            post(move |headers: HeaderMap| {
+                let captured = captured_auth_clone.clone();
+                async move {
+                    *captured.lock().unwrap() = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    Json(serde_json::json!({
+                        "id": "msg_sglang_2",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "model": "llama-3.1-70b",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1}
+                    }))
+                }
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let config = ProviderConfig {
+            name: "sglang-auth-test".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("sglang-test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some(format!("http://{addr}")),
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        let provider = registry.get_provider("sglang-auth-test").unwrap();
+        let request = AnthropicRequest {
+            model: "llama-3.1-70b".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        provider.send_message(request).await.unwrap();
+        assert_eq!(
+            captured_auth.lock().unwrap().as_deref(),
+            Some("Bearer sglang-test-key")
+        );
     }
 }
