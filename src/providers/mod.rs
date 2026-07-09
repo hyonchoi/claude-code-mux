@@ -141,7 +141,7 @@ impl ProviderConfig {
 }
 
 // Re-export provider implementations
-pub use anthropic_compatible::AnthropicCompatibleProvider;
+pub use anthropic_compatible::{AnthropicAuthHeaderStyle, AnthropicCompatibleProvider};
 pub use copilot::CopilotProvider;
 pub use openai::OpenAIProvider;
 pub use registry::ProviderRegistry;

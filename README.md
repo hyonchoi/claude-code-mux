@@ -572,16 +572,18 @@ Result: glm-4.6 (original model name, routed through model mappings)
 
 ### NVIDIA NIM Cloud API
 
-**Use Case**: Access state-of-the-art open-source models (Llama, Mistral) via NVIDIA's OpenAI-compatible cloud API with fallback to other providers.
+**Use Case**: Access state-of-the-art open-source models (Llama, Mistral) via NVIDIA's Anthropic-compatible cloud API with fallback to other providers.
 
 **Providers**:
-- NVIDIA NIM (cloud API, free tier available, OpenAI-compatible)
+- NVIDIA NIM (cloud API, free tier available, Anthropic-compatible `/v1/messages`, authenticates via `Authorization: Bearer <api_key>`)
 - Anthropic (fallback for when NIM is unavailable)
 
 **Setup**:
 1. Get your free API key at [https://build.nvidia.com/](https://build.nvidia.com/)
 2. Configure the provider with your API key
 3. Route requests to NVIDIA NIM
+
+**⚠️ BREAKING CHANGE (2026-07)**: `provider_type = "nvidia-nim"` now routes through NVIDIA's Anthropic-compatible API (`/v1/messages`) instead of the OpenAI Chat Completions path. If you have an existing config with `base_url` ending in `/v1` (from before this change), drop the `/v1` suffix — the provider appends `/v1/messages` itself, so a `/v1`-suffixed URL will 404. The auto-correct safety net strips a trailing `/v1` with a warning log.
 
 **Configuration** (see `config/templates/nvidia-nim.toml` for full template):
 ```toml
@@ -590,8 +592,8 @@ name = "nvidia-nim"
 provider_type = "nvidia-nim"
 # Get your free API key from https://build.nvidia.com/
 api_key = "your-nvidia-nim-api-key-here"
-# NVIDIA's cloud endpoint
-base_url = "https://integrate.api.nvidia.com/v1"
+# NVIDIA's cloud endpoint (bare host — ccm appends /v1/messages itself, do not add /v1)
+base_url = "https://integrate.api.nvidia.com"
 enabled = true
 # Rate limit: 40 requests per minute (provider-level enforcement)
 rate_limit_rpm = 40

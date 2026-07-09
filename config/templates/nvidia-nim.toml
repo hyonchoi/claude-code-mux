@@ -1,11 +1,19 @@
 # NVIDIA NIM Provider Configuration
-# 
+#
 # NVIDIA NIM (NVIDIA Inference Microservices) provides cloud API access to
 # state-of-the-art LLMs including Meta Llama, Mistral, and other models.
-# The cloud API is OpenAI-compatible.
+# The cloud API is Anthropic-compatible (/v1/messages), authenticated via
+# `Authorization: Bearer <nvapi-key>`.
+#
+# BREAKING CHANGE (2026-07): provider_type = "nvidia-nim" used to route through
+# an OpenAI Chat Completions-compatible path. It now routes through the
+# Anthropic Messages API path instead. If you have an explicit `base_url`
+# override ending in `/v1` from before this change, drop the `/v1` suffix —
+# this provider appends `/v1/messages` itself, and a `/v1`-suffixed base_url
+# will 404 with a doubled `/v1/v1/messages` path.
 #
 # Get your free API key: https://build.nvidia.com/
-# 
+#
 # Setup options:
 # 1. Cloud NIM (recommended) - Use NVIDIA's managed cloud API
 # 2. Self-hosted NIM - Run NIM containers on your own infrastructure
@@ -25,11 +33,11 @@ name = "nvidia-nim"
 provider_type = "nvidia-nim"
 # Your NVIDIA NIM API key from https://build.nvidia.com/
 api_key = "your-nvidia-nim-api-key-here"
-# NVIDIA's cloud endpoint for NIM
-base_url = "https://integrate.api.nvidia.com/v1"
+# NVIDIA's cloud endpoint for NIM (bare host — do NOT add a /v1 suffix, this
+# provider appends /v1/messages itself)
+base_url = "https://integrate.api.nvidia.com"
 enabled = true
 # NVIDIA NIM rate limit: 40 requests per minute
-# OpenAI-compatible provider enforces this limit before outbound calls
 rate_limit_rpm = 40
 # Optional: max wait before fallback to next mapping (default: 2000ms)
 rate_limit_max_wait_ms = 2000
@@ -52,7 +60,7 @@ models = []
 # name = "nvidia-nim-self-hosted"
 # provider_type = "nvidia-nim"
 # api_key = "your-self-hosted-nim-api-key"  # If authentication is configured
-# base_url = "https://your-domain.com/v1"  # Your self-hosted endpoint
+# base_url = "https://your-domain.com"  # Your self-hosted endpoint (bare host, no /v1 suffix)
 # enabled = false
 # models = []
 
@@ -69,7 +77,7 @@ models = []
 # name = "nvidia-nim-local"
 # provider_type = "nvidia-nim"
 # api_key = ""  # Leave empty for local deployments
-# base_url = "http://localhost:8000/v1"
+# base_url = "http://localhost:8000"  # bare host, no /v1 suffix
 # enabled = false
 # # Discover models: curl http://localhost:8000/v1/models | jq '.data[].id'
 # models = []
@@ -193,8 +201,9 @@ connect_timeout_ms = 10000
 #    - background = "nvidia-nim" (use Llama for background tasks)
 #
 # Q: Token counting isn't working with NVIDIA NIM models.
-# A: NVIDIA NIM may not support Anthropic's token counting API. The router
-#    falls back to OpenAI tokenizer estimates, which work reasonably well.
+# A: NVIDIA NIM's /v1/messages endpoint may not implement Anthropic's
+#    count_tokens endpoint. The router falls back to a character-based
+#    estimate, which works reasonably well.
 #
 # Q: My API key is invalid or expired.
 # A: Check https://build.nvidia.com/ and verify your API key is still active.
@@ -202,7 +211,13 @@ connect_timeout_ms = 10000
 #
 # Q: Connection timeout to NVIDIA NIM API.
 # A: Check your internet connection and that the base URL is correct:
-#    https://integrate.api.nvidia.com/v1
+#    https://integrate.api.nvidia.com (no /v1 suffix)
 #
 # Q: I want to run NIM locally instead of using the cloud API.
 # A: See OPTION 3 (Local NIM) above. Requires NVIDIA GPU and Docker.
+#
+# Q: My existing nvidia-nim config broke after upgrading.
+# A: provider_type = "nvidia-nim" now routes through the Anthropic Messages
+#    API (/v1/messages) instead of OpenAI Chat Completions. If you had an
+#    explicit base_url ending in "/v1", drop the suffix — see the BREAKING
+#    CHANGE note at the top of this file.

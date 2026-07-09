@@ -5,6 +5,16 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9-chy] - 2026-07-09
+
+### Changed
+- **BREAKING: `nvidia-nim` migrated from OpenAI-compatible to Anthropic-compatible** — `provider_type = "nvidia-nim"` now routes through NVIDIA's Anthropic Messages (`/v1/messages`) endpoint instead of OpenAI Chat Completions, authenticating with `Authorization: Bearer <nvapi-key>`. The default `base_url` changed from `https://integrate.api.nvidia.com/v1` to `https://integrate.api.nvidia.com`. If you have an explicit `base_url` override ending in `/v1` left over from the old config, it's now auto-corrected (with a warning log) instead of 404ing — see Fixed below. `nvidia-nim` is not eligible for passthrough auth (same as `z.ai`/`minimax`/`zenmux`/`kimi-coding`).
+
+### Fixed
+- **vLLM/SGLang auth header** — `provider_type = "vllm"` and `"sglang"` with `auth_type = "apikey"` now send `Authorization: Bearer <api_key>` instead of `x-api-key`. vLLM and SGLang authenticate the OpenAI way when started with `--api-key`, so the previous `x-api-key` header was rejected. Every other Anthropic-format provider (`anthropic`, `z.ai`, `minimax`, `zenmux`, `kimi-coding`) is unaffected and still sends `x-api-key`.
+- **`AnthropicCompatibleProvider` no longer hard-fails on a missing `usage` field** — some Anthropic-compatible backends (confirmed for NVIDIA NIM) omit `usage`, or omit individual token counts within it, on some responses. Each of `input_tokens`/`output_tokens` is now defaulted to 0 independently when missing, instead of the whole response parse failing — or, in an earlier iteration of this fix, the whole `usage` object being zeroed out and silently discarding a real token count that was present alongside the missing one. Affects all Anthropic-format providers (`anthropic`, `z.ai`, `minimax`, `zenmux`, `kimi-coding`, `vllm`, `sglang`, `nvidia-nim`).
+- **`nvidia-nim` auto-corrects a stale `/v1`-suffixed `base_url`** — configs carried over from the pre-migration OpenAI-compatible setup had `base_url` ending in `/v1`, which would now silently 404 against `/v1/v1/messages`. The registry strips a trailing `/v1` (with a warning log pointing at the corrected value) so upgrading doesn't require a manual config edit.
+
 ## [0.8.8-chy] - 2026-07-09
 
 ### Added

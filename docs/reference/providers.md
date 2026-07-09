@@ -11,8 +11,8 @@
 | `kimi-coding` | Anthropic Messages | `https://api.kimi.com/coding` | api_key, passthrough |
 | `vllm` | Anthropic Messages | `http://localhost:8000` | api_key, passthrough |
 | `sglang` | Anthropic Messages | `http://localhost:30000` | api_key, passthrough |
+| `nvidia-nim` | Anthropic Messages | `https://integrate.api.nvidia.com` | api_key |
 | `openai` | OpenAI Chat Completions / Responses | `https://api.openai.com/v1` | api_key, oauth, passthrough |
-| `nvidia-nim` | OpenAI Chat Completions | `https://integrate.api.nvidia.com/v1` | api_key, passthrough |
 | `openrouter` | OpenAI Chat Completions | `https://openrouter.ai/api/v1` | api_key, passthrough |
 | `deepinfra` | OpenAI Chat Completions | provider preset | api_key, passthrough |
 | `novita` | OpenAI Chat Completions | provider preset | api_key, passthrough |
@@ -29,11 +29,15 @@
 
 ## Anthropic-format providers
 
-These speak the Anthropic Messages API natively, so `ccm` passes requests through without translation. The types are `anthropic`, `z.ai`, `minimax`, `zenmux`, `kimi-coding`, `vllm`, and `sglang`.
+These speak the Anthropic Messages API natively, so `ccm` passes requests through without translation. The types are `anthropic`, `z.ai`, `minimax`, `zenmux`, `kimi-coding`, `vllm`, `sglang`, and `nvidia-nim`.
 
 Only the `anthropic` type (when the provider name is `anthropic`) does real upstream token counting at `/v1/messages/count_tokens`. The others estimate token counts.
 
 `vllm` and `sglang` are Anthropic-compatible providers ([AnthropicCompatibleProvider](https://docs.anthropic.com/en/docs/ai-safety-and-controls/bedrock/bedrock-anthropic-compatible-api)). They connect to self-hosted vLLM (0.8+) and SGLang (0.4+) instances respectively. [vLLM docs](https://docs.vllm.com/). [SGLang docs](https://sgl-project.github.io/).
+
+**Auth header:** vLLM, SGLang, and `nvidia-nim` authenticate the OpenAI way — `Authorization: Bearer <api_key>` — not the Anthropic-native `x-api-key` header every other Anthropic-format provider above uses. `ccm` sends the correct header automatically based on `provider_type`; this is fixed per type and not user-configurable. Don't point `provider_type = "vllm"`, `"sglang"`, or `"nvidia-nim"` at a real Anthropic-native endpoint (or vice versa) — the header won't match what the server expects and auth will fail.
+
+**`nvidia-nim`** targets NVIDIA's Anthropic-compatible `/v1/messages` endpoint (hosted `build.nvidia.com` catalog by default, or a self-hosted NIM container via `base_url` override). Base URL is a bare host — `ccm` appends `/v1/messages` itself, so a `/v1`-suffixed `base_url` produces a broken `/v1/v1/messages` path. Not eligible for passthrough auth (same as `z.ai`/`minimax`/`zenmux`/`kimi-coding`) — only `anthropic`, `vllm`, and `sglang` support passthrough today. NVIDIA's hosted catalog serves many different backend models; Anthropic Messages API fidelity (tool use, streaming shapes, `usage` reporting) may vary by model — `ccm` tolerates a missing `usage` field, but hasn't been verified against every model in the catalog. NVIDIA NIM often allows 40 requests per minute, so set `rate_limit_rpm = 40` and let `ccm` fail over when the budget runs out.
 
 ## OpenAI-format providers
 
@@ -44,8 +48,6 @@ These translate between the Anthropic Messages API and the OpenAI Chat Completio
 - Chat Completions (`/chat/completions`) by default.
 - Responses API (`/responses`) when the model name contains `codex`.
 - The ChatGPT Codex backend (`https://chatgpt.com/backend-api`) when the provider uses OAuth.
-
-`nvidia-nim` (base `https://integrate.api.nvidia.com/v1`) is the canonical rate-limited provider. NVIDIA NIM often allows 40 requests per minute, so set `rate_limit_rpm = 40` and let `ccm` fail over when the budget runs out.
 
 `openrouter` (base `https://openrouter.ai/api/v1`) adds `HTTP-Referer` and `X-Title` headers on each request.
 
