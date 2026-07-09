@@ -35,6 +35,8 @@ Only the `anthropic` type (when the provider name is `anthropic`) does real upst
 
 `vllm` and `sglang` are Anthropic-compatible providers ([AnthropicCompatibleProvider](https://docs.anthropic.com/en/docs/ai-safety-and-controls/bedrock/bedrock-anthropic-compatible-api)). They connect to self-hosted vLLM (0.8+) and SGLang (0.4+) instances respectively. [vLLM docs](https://docs.vllm.com/). [SGLang docs](https://sgl-project.github.io/).
 
+**Auth header:** vLLM and SGLang authenticate the OpenAI way — `Authorization: Bearer <api_key>` — not the Anthropic-native `x-api-key` header every other Anthropic-format provider above uses. `ccm` sends the correct header automatically based on `provider_type`; this is fixed per type and not user-configurable. Don't point `provider_type = "vllm"` or `"sglang"` at a real Anthropic-native endpoint (or vice versa) — the header won't match what the server expects and auth will fail.
+
 ## OpenAI-format providers
 
 These translate between the Anthropic Messages API and the OpenAI Chat Completions API.

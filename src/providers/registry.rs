@@ -1,7 +1,7 @@
 use super::gemini::GeminiProvider;
 use super::{
-    error::ProviderError, AnthropicCompatibleProvider, AnthropicProvider, OpenAIProvider,
-    ProviderConfig,
+    error::ProviderError, AnthropicAuthHeaderStyle, AnthropicCompatibleProvider, AnthropicProvider,
+    OpenAIProvider, ProviderConfig,
 };
 use crate::auth::TokenStore;
 use std::collections::HashMap;
@@ -177,6 +177,7 @@ impl ProviderRegistry {
                         token_store.clone(),
                         config.supported_beta_options.clone(),
                     )
+                    .with_header_style(AnthropicAuthHeaderStyle::Bearer)
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
                 "sglang" => Box::new(
@@ -193,6 +194,7 @@ impl ProviderRegistry {
                         token_store.clone(),
                         config.supported_beta_options.clone(),
                     )
+                    .with_header_style(AnthropicAuthHeaderStyle::Bearer)
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
 

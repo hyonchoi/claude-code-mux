@@ -40,24 +40,29 @@ name = "gpt-5.1"
 
 # vLLM Anthropic-compatible provider (self-hosted)
 # vLLM 0.8+ supports /v1/messages Anthropic-compatible endpoint natively
+# Auth: vllm/sglang always send `Authorization: Bearer <api_key>` (not x-api-key),
+# matching vLLM/SGLang's OpenAI-style --api-key convention. This is fixed per
+# provider_type — do not point provider_type = "vllm" at a real Anthropic-native
+# endpoint, it will send the wrong header and the request will fail.
 [[providers]]
 name = "vllm-local"
 provider_type = "vllm"
 # base_url = "http://localhost:8000"  # Default, override if running on different port/host
 # AnthropicCompatibleProvider appends /v1/messages automatically
 auth_type = "apikey"
-api_key = "none"  # Placeholder — self-hosted vLLM typically ignores this
+api_key = "none"  # Placeholder — self-hosted vLLM typically ignores this unless started with --api-key
 # supported_beta_options = []  # Uncomment to suppress default beta headers (vLLM may not recognize Claude-specific beta flags)
 models = ["qwen3.6-27b", "deepseek-r1-32b"]
 
 # SGLang Anthropic-compatible provider (self-hosted)
 # SGLang 0.4+ supports /v1/messages Anthropic-compatible endpoint natively
+# Auth: same Bearer-only behavior as vLLM above — see note there.
 [[providers]]
 name = "sglang-local"
 provider_type = "sglang"
 # base_url = "http://localhost:30000"  # Default, override if running on different port/host
 # AnthropicCompatibleProvider appends /v1/messages automatically
 auth_type = "apikey"
-api_key = "none"  # Placeholder — self-hosted SGLang typically ignores this
+api_key = "none"  # Placeholder — self-hosted SGLang typically ignores this unless started with --api-key
 # supported_beta_options = []  # Uncomment to suppress default beta headers
 models = ["qwen3.6-27b", "deepseek-r1-32b"]

@@ -15,6 +15,18 @@ use tracing::{debug, warn};
 
 pub(crate) const DEFAULT_RATE_LIMIT_MAX_WAIT_MS: u64 = 2_000;
 
+/// Which header carries the API key for statically-configured (non-OAuth,
+/// non-passthrough) auth. Anthropic-native and most Anthropic-compatible
+/// providers expect `x-api-key`; self-hosted OpenAI-convention servers like
+/// vLLM/SGLang (run with `--api-key`) reject that and require
+/// `Authorization: Bearer <key>` instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnthropicAuthHeaderStyle {
+    #[default]
+    XApiKey,
+    Bearer,
+}
+
 /// Generic Anthropic-compatible provider
 /// Works with: Anthropic, OpenRouter, z.ai, Minimax, NVIDIA NIM, etc.
 /// Any provider that accepts Anthropic Messages API format
@@ -24,10 +36,18 @@ pub struct AnthropicCompatibleProvider {
     base_url: String,
     client: Client,
     models: Vec<String>,
-    /// Custom headers to add (e.g., "HTTP-Referer" for OpenRouter)
+    /// Custom headers to add (e.g., "HTTP-Referer" for OpenRouter). Applied after the
+    /// auth header at each call site — a custom header named "Authorization" or
+    /// "x-api-key" would be sent alongside the auth header (reqwest does not dedupe),
+    /// not override it. Not currently user-configurable (only set by hardcoded
+    /// constructors like `openrouter_with_auth`), so this is a latent risk, not a
+    /// reachable bug today.
     custom_headers: Vec<(String, String)>,
     /// Authentication type (ApiKey, OAuth, or Passthrough)
     auth_type: AuthType,
+    /// Header style for statically-configured API-key auth (x-api-key vs Bearer).
+    /// Only affects the `AuthType::ApiKey` path — Passthrough and OAuth always use Bearer.
+    header_style: AnthropicAuthHeaderStyle,
     /// OAuth provider ID (if using OAuth instead of API key)
     oauth_provider: Option<String>,
     /// Token store for OAuth authentication
@@ -104,6 +124,7 @@ impl AnthropicCompatibleProvider {
             models,
             custom_headers: Vec::new(),
             auth_type,
+            header_style: AnthropicAuthHeaderStyle::default(),
             oauth_provider,
             token_store,
             supported_beta_options,
@@ -201,6 +222,7 @@ impl AnthropicCompatibleProvider {
             models,
             custom_headers,
             auth_type,
+            header_style: AnthropicAuthHeaderStyle::default(),
             oauth_provider,
             token_store,
             supported_beta_options,
@@ -232,6 +254,22 @@ impl AnthropicCompatibleProvider {
             .and_then(NonZeroU32::new)
             .map(|rpm| Arc::new(RateLimiter::direct(Quota::per_minute(rpm))));
         self
+    }
+
+    /// Set the header style for statically-configured API-key auth (x-api-key vs Bearer).
+    /// Used by self-hosted OpenAI-convention providers (vLLM, SGLang) that reject x-api-key.
+    pub fn with_header_style(mut self, header_style: AnthropicAuthHeaderStyle) -> Self {
+        self.header_style = header_style;
+        self
+    }
+
+    /// Whether outbound requests should carry `Authorization: Bearer <token>` instead of
+    /// `x-api-key`. True for Passthrough and OAuth (always) or when this provider's
+    /// `header_style` is explicitly set to `Bearer` (vLLM/SGLang).
+    pub(crate) fn is_bearer_auth(&self) -> bool {
+        self.auth_type == AuthType::Passthrough
+            || self.is_oauth()
+            || self.header_style == AnthropicAuthHeaderStyle::Bearer
     }
 
     async fn await_rate_limit_permit(&self) -> Result<(), ProviderError> {
@@ -520,10 +558,10 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json");
 
-        // Set auth header based on OAuth vs API key
-        if self.auth_type == AuthType::Passthrough || self.is_oauth() {
+        // Set auth header based on OAuth/passthrough/header_style
+        if self.is_bearer_auth() {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", auth_value));
-            tracing::debug!("🔐 Using OAuth Bearer token for {}", self.name);
+            tracing::debug!("🔐 Using Bearer token for {}", self.name);
         } else {
             req_builder = req_builder.header("x-api-key", auth_value);
         }
@@ -660,8 +698,9 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                 .header("anthropic-version", "2023-06-01")
                 .header("Content-Type", "application/json");
 
-            // Set auth header
-            if self.auth_type == AuthType::Passthrough || self.is_oauth() {
+            // Set auth header. Note: this branch only runs for self.name == "anthropic"
+            // (see the guard above), so vLLM/SGLang never reach this call site today.
+            if self.is_bearer_auth() {
                 req_builder = req_builder
                     .header("Authorization", format!("Bearer {}", auth_value))
                     .header("anthropic-beta", "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
@@ -753,10 +792,10 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json");
 
-        // Set auth header based on OAuth vs API key
-        if self.auth_type == AuthType::Passthrough || self.is_oauth() {
+        // Set auth header based on OAuth/passthrough/header_style
+        if self.is_bearer_auth() {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", auth_value));
-            tracing::debug!("🔐 Using OAuth Bearer token for streaming on {}", self.name);
+            tracing::debug!("🔐 Using Bearer token for streaming on {}", self.name);
         } else {
             req_builder = req_builder.header("x-api-key", auth_value);
         }
@@ -920,6 +959,57 @@ mod tests {
             None,
             None,
         );
+        let result = provider
+            .get_auth_header(Some("caller-token"))
+            .await
+            .unwrap();
+        assert_eq!(result, "caller-token");
+    }
+
+    #[test]
+    fn test_default_header_style_is_x_api_key() {
+        let provider = make_provider();
+        assert!(!provider.is_bearer_auth());
+    }
+
+    #[test]
+    fn test_header_style_bearer_forces_bearer_auth_under_api_key() {
+        let provider = AnthropicCompatibleProvider::new(
+            "vllm-test".to_string(),
+            "internal-api-key".to_string(),
+            "http://localhost:8000".to_string(),
+            vec![],
+            None,
+            None,
+        )
+        .with_header_style(AnthropicAuthHeaderStyle::Bearer);
+        assert!(provider.is_bearer_auth());
+    }
+
+    #[test]
+    fn test_other_providers_keep_x_api_key_by_default() {
+        // Regression guard: providers that don't opt into Bearer header style
+        // (anthropic, openrouter, z.ai, minimax, kimi-coding, nvidia-nim) must
+        // keep sending x-api-key under AuthType::ApiKey.
+        let provider = AnthropicCompatibleProvider::anthropic("key".to_string(), vec![]);
+        assert!(!provider.is_bearer_auth());
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_auth_stays_bearer_regardless_of_header_style() {
+        // header_style is irrelevant once auth_type is Passthrough — the caller's
+        // token is always sent as Bearer, never the configured api_key.
+        let provider = AnthropicCompatibleProvider::new_with_auth(
+            "vllm-passthrough".to_string(),
+            "internal-api-key".to_string(),
+            "http://localhost:8000".to_string(),
+            vec![],
+            AuthType::Passthrough,
+            None,
+            None,
+        )
+        .with_header_style(AnthropicAuthHeaderStyle::Bearer);
+        assert!(provider.is_bearer_auth());
         let result = provider
             .get_auth_header(Some("caller-token"))
             .await
