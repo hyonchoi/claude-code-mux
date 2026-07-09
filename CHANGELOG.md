@@ -5,6 +5,17 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8-chy] - 2026-07-09
+
+### Added
+- **vLLM and SGLang provider types** — connect to self-hosted vLLM (0.8+) and SGLang (0.4+) instances that support the Anthropic-compatible API (`/v1/messages`). You can now route requests to your own vLLM or SGLang servers with zero format translation. Configure with `provider_type = "vllm"` or `provider_type = "sglang"` in your TOML config. Both support `apikey` and `passthrough` auth modes.
+
+### Changed
+- **Passthrough auth extended to vLLM and SGLang** — bearer token passthrough now works for vLLM and SGLang providers in addition to Anthropic-type providers. Caller-provided tokens are forwarded correctly when using `auth_type = "passthrough"`.
+
+### Fixed
+- **Beta headers note for self-hosted providers** — documentation now warns that `AnthropicCompatibleProvider` injects default `anthropic-beta` headers, which self-hosted vLLM/SGLang endpoints may not recognize. No config option to suppress yet — requires a code fix.
+
 ## [0.8.7-chy] - 2026-07-02
 
 ### Added
@@ -283,6 +294,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TOML-based configuration
 - Token counting endpoint (`/v1/messages/count_tokens`)
 
+[0.8.8-chy]: https://github.com/9j/claude-code-mux/compare/v0.8.7-chy...v0.8.8-chy
 [0.7.0]: https://github.com/9j/claude-code-mux/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/9j/claude-code-mux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/9j/claude-code-mux/compare/v0.4.3...v0.5.0

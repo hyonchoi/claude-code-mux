@@ -162,6 +162,40 @@ impl ProviderRegistry {
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
 
+                // vLLM and SGLang (self-hosted, Anthropic-compatible)
+                "vllm" => Box::new(
+                    AnthropicCompatibleProvider::new_with_options_and_auth(
+                        config.name.clone(),
+                        api_key,
+                        config
+                            .base_url
+                            .clone()
+                            .unwrap_or_else(|| "http://localhost:8000".to_string()),
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        config.oauth_provider.clone(),
+                        token_store.clone(),
+                        config.supported_beta_options.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+                "sglang" => Box::new(
+                    AnthropicCompatibleProvider::new_with_options_and_auth(
+                        config.name.clone(),
+                        api_key,
+                        config
+                            .base_url
+                            .clone()
+                            .unwrap_or_else(|| "http://localhost:30000".to_string()),
+                        config.models.clone(),
+                        config.auth_type.clone(),
+                        config.oauth_provider.clone(),
+                        token_store.clone(),
+                        config.supported_beta_options.clone(),
+                    )
+                    .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
+                ),
+
                 // OpenAI-compatible providers
                 "openrouter" => Box::new(OpenAIProvider::openrouter(
                     config.name.clone(),
@@ -628,5 +662,456 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
         let registry = result.unwrap();
         assert!(registry.get_provider("my-copilot").is_some());
+    }
+
+    #[test]
+    fn test_vllm_provider_registration() {
+        let config = ProviderConfig {
+            name: "my-vllm".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None, // Use default: http://localhost:8000
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("my-vllm").is_some());
+    }
+
+    #[test]
+    fn test_sglang_provider_registration() {
+        let config = ProviderConfig {
+            name: "my-sglang".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None, // Use default: http://localhost:30000
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("my-sglang").is_some());
+    }
+
+    #[test]
+    fn test_vllm_with_custom_base_url() {
+        let config = ProviderConfig {
+            name: "vllm-remote".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some("http://10.0.0.5:8000".to_string()),
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(100),
+            rate_limit_max_wait_ms: Some(3000),
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("vllm-remote").is_some());
+    }
+
+    #[test]
+    fn test_sglang_with_custom_base_url() {
+        let config = ProviderConfig {
+            name: "sglang-remote".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some("http://10.0.0.10:30000".to_string()),
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(200),
+            rate_limit_max_wait_ms: Some(5000),
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("sglang-remote").is_some());
+    }
+
+    #[test]
+    fn test_vllm_passthrough_auth_registration() {
+        use crate::providers::AuthType;
+
+        let config = ProviderConfig {
+            name: "vllm-passthrough".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: AuthType::Passthrough,
+            supported_beta_options: vec![],
+            api_key: None, // No api_key needed for passthrough
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("vllm-passthrough").is_some());
+    }
+
+    #[test]
+    fn test_sglang_passthrough_auth_registration() {
+        use crate::providers::AuthType;
+
+        let config = ProviderConfig {
+            name: "sglang-passthrough".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: AuthType::Passthrough,
+            supported_beta_options: vec![],
+            api_key: None,
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let result = ProviderRegistry::from_configs(&[config], None);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let registry = result.unwrap();
+        assert!(registry.get_provider("sglang-passthrough").is_some());
+    }
+
+    #[test]
+    fn test_vllm_disabled_provider_skipped() {
+        let config = ProviderConfig {
+            name: "vllm-disabled".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(false),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        assert!(
+            registry.get_provider("vllm-disabled").is_none(),
+            "Disabled provider should not be registered"
+        );
+    }
+
+    #[test]
+    fn test_sglang_disabled_provider_skipped() {
+        let config = ProviderConfig {
+            name: "sglang-disabled".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(false),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        assert!(
+            registry.get_provider("sglang-disabled").is_none(),
+            "Disabled provider should not be registered"
+        );
+    }
+
+    #[test]
+    fn test_vllm_rate_limit_zero_rejected() {
+        let config = ProviderConfig {
+            name: "vllm-bad-rate".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(0),
+            rate_limit_max_wait_ms: None,
+        };
+
+        let err = ProviderRegistry::from_configs(&[config], None)
+            .err()
+            .expect("expected config error for rate_limit_rpm=0");
+        match err {
+            ProviderError::ConfigError(msg) => {
+                assert!(msg.contains("rate_limit_rpm=0"));
+            }
+            other => panic!("expected config error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_sglang_rate_limit_zero_rejected() {
+        let config = ProviderConfig {
+            name: "sglang-bad-rate".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: Some(0),
+            rate_limit_max_wait_ms: None,
+        };
+
+        let err = ProviderRegistry::from_configs(&[config], None)
+            .err()
+            .expect("expected config error for rate_limit_rpm=0");
+        match err {
+            ProviderError::ConfigError(msg) => {
+                assert!(msg.contains("rate_limit_rpm=0"));
+            }
+            other => panic!("expected config error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_vllm_default_base_url_is_localhost_8000() {
+        // When base_url is None, vllm should default to http://localhost:8000
+        // We verify registration succeeds (the default URL is used internally)
+        let config = ProviderConfig {
+            name: "vllm-default-url".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        assert!(registry.get_provider("vllm-default-url").is_some());
+    }
+
+    #[test]
+    fn test_sglang_default_base_url_is_localhost_30000() {
+        // When base_url is None, sglang should default to http://localhost:30000
+        let config = ProviderConfig {
+            name: "sglang-default-url".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: None,
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        assert!(registry.get_provider("sglang-default-url").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_vllm_provider_uses_anthropic_messages_endpoint() {
+        use axum::{routing::post, Json, Router};
+        use tokio::net::TcpListener;
+
+        // Mock vLLM Anthropic-compatible endpoint
+        let app = Router::new().route(
+            "/v1/messages",
+            post(|| async {
+                Json(serde_json::json!({
+                    "id": "msg_vllm_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "vllm response"}],
+                    "model": "qwen2.5-72b",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }))
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let config = ProviderConfig {
+            name: "vllm-mock".to_string(),
+            provider_type: "vllm".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some(format!("http://{addr}")),
+            models: vec!["qwen2.5-72b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        let provider = registry.get_provider("vllm-mock").unwrap();
+        let request = AnthropicRequest {
+            model: "qwen2.5-72b".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let response = provider.send_message(request).await.unwrap();
+        assert_eq!(response.model, "qwen2.5-72b");
+        assert!(matches!(
+            response.content.as_slice(),
+            [ContentBlock::Text { text }] if text == "vllm response"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_sglang_provider_uses_anthropic_messages_endpoint() {
+        use axum::{routing::post, Json, Router};
+        use tokio::net::TcpListener;
+
+        // Mock SGLang Anthropic-compatible endpoint
+        let app = Router::new().route(
+            "/v1/messages",
+            post(|| async {
+                Json(serde_json::json!({
+                    "id": "msg_sglang_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "sglang response"}],
+                    "model": "llama-3.1-70b",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }))
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let config = ProviderConfig {
+            name: "sglang-mock".to_string(),
+            provider_type: "sglang".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some(format!("http://{addr}")),
+            models: vec!["llama-3.1-70b".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        let provider = registry.get_provider("sglang-mock").unwrap();
+        let request = AnthropicRequest {
+            model: "llama-3.1-70b".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        let response = provider.send_message(request).await.unwrap();
+        assert_eq!(response.model, "llama-3.1-70b");
+        assert!(matches!(
+            response.content.as_slice(),
+            [ContentBlock::Text { text }] if text == "sglang response"
+        ));
     }
 }

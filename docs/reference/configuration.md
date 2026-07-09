@@ -74,6 +74,8 @@ An array of upstream providers. Each provider is referenced by name from model m
 | `location` | String | unset | Vertex AI only. |
 | `models` | array | unset | Legacy and deprecated. Prefer `[[models]]` mappings. |
 
+**Beta headers:** `AnthropicCompatibleProvider` always injects default `anthropic-beta` headers (OAuth, interleaved thinking, fine-grained tool streaming) when no incoming `anthropic-beta` header is present. There is currently no config option to suppress these defaults. If your self-hosted vLLM/SGLang endpoint rejects requests with beta headers, this is a known limitation that would require a code fix.
+
 ## [[models]] and [[models.mappings]]
 
 `[[models]]` declares an external model name your clients send. Each model holds an ordered list of `[[models.mappings]]`.
