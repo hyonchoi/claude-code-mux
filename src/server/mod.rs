@@ -3991,4 +3991,35 @@ mod tests {
             "anthropic with ApiKey should not get passthrough"
         );
     }
+
+    #[test]
+    fn test_nvidia_nim_excluded_from_passthrough_auth() {
+        use crate::providers::{AuthType, ProviderConfig};
+
+        // nvidia-nim is now AnthropicCompatibleProvider-backed (like z.ai/minimax/
+        // zenmux/kimi-coding, none of which are passthrough-eligible), but it is
+        // deliberately NOT added to the `should_use_passthrough_auth` match arm
+        // even with auth_type=Passthrough configured — same treatment as its
+        // AnthropicCompatibleProvider-backed siblings.
+        let nim_passthrough = ProviderConfig {
+            name: "nvidia-nim-passthrough".to_string(),
+            provider_type: "nvidia-nim".to_string(),
+            auth_type: AuthType::Passthrough,
+            oauth_provider: None,
+            api_key: None,
+            base_url: None,
+            project_id: None,
+            location: None,
+            models: vec![],
+            enabled: Some(true),
+            supported_beta_options: vec![],
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        assert!(
+            !super::should_use_passthrough_auth(&[nim_passthrough], "nvidia-nim-passthrough"),
+            "nvidia-nim should not get passthrough even with auth_type=Passthrough"
+        );
+    }
 }

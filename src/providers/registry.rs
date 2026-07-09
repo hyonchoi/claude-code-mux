@@ -110,19 +110,23 @@ impl ProviderRegistry {
                     )
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
+                // NVIDIA NIM (Anthropic-compatible; supports both the hosted
+                // build.nvidia.com catalog and self-hosted NIM containers via base_url override)
                 "nvidia-nim" => Box::new(
-                    OpenAIProvider::new_with_auth(
+                    AnthropicCompatibleProvider::new_with_options_and_auth(
                         config.name.clone(),
                         api_key,
                         config
                             .base_url
                             .clone()
-                            .unwrap_or_else(|| "https://integrate.api.nvidia.com/v1".to_string()),
+                            .unwrap_or_else(|| "https://integrate.api.nvidia.com".to_string()),
                         config.models.clone(),
                         config.auth_type.clone(),
                         config.oauth_provider.clone(),
                         token_store.clone(),
+                        config.supported_beta_options.clone(),
                     )
+                    .with_header_style(AnthropicAuthHeaderStyle::Bearer)
                     .with_rate_limit_config(config.rate_limit_rpm, config.rate_limit_max_wait_ms),
                 ),
                 "z.ai" => Box::new(
@@ -406,7 +410,7 @@ mod tests {
             oauth_provider: None,
             project_id: None,
             location: None,
-            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            base_url: Some("https://integrate.api.nvidia.com".to_string()),
             models: vec!["meta-llama-3.1-405b-instruct".to_string()],
             enabled: Some(true),
             rate_limit_rpm: Some(40),
@@ -419,7 +423,7 @@ mod tests {
         assert_eq!(config.rate_limit_rpm, Some(40));
         assert_eq!(
             config.base_url,
-            Some("https://integrate.api.nvidia.com/v1".to_string())
+            Some("https://integrate.api.nvidia.com".to_string())
         );
     }
 
@@ -434,7 +438,7 @@ mod tests {
             oauth_provider: None,
             project_id: None,
             location: None,
-            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            base_url: Some("https://integrate.api.nvidia.com".to_string()),
             models: vec!["meta-llama-3.1-405b-instruct".to_string()],
             enabled: Some(true),
             rate_limit_rpm: Some(40),
@@ -485,7 +489,7 @@ mod tests {
             oauth_provider: None,
             project_id: None,
             location: None,
-            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            base_url: Some("https://integrate.api.nvidia.com".to_string()),
             models: vec!["meta-llama-3.1-405b-instruct".to_string()],
             enabled: Some(true),
             rate_limit_rpm: Some(0),
@@ -514,7 +518,7 @@ mod tests {
             oauth_provider: None,
             project_id: None,
             location: None,
-            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            base_url: Some("https://integrate.api.nvidia.com".to_string()),
             models: vec!["meta-llama-3.1-405b-instruct".to_string()],
             enabled: Some(true),
             rate_limit_rpm: Some(1),
@@ -554,29 +558,26 @@ mod tests {
         assert!(registry.is_ok(), "disabled providers should be skipped");
     }
 
-    async fn start_nim_mock_server() -> std::net::SocketAddr {
+    #[tokio::test]
+    async fn test_nvidia_nim_uses_anthropic_messages_endpoint() {
+        // nvidia-nim migrated from OpenAI-compat (/v1/chat/completions) to
+        // Anthropic-compat (/v1/messages). Regression guard: no route is
+        // registered for /v1/chat/completions, so a stale OpenAI-compat call
+        // site would 404 against this mock, not silently succeed.
         use axum::{routing::post, Json, Router};
         use tokio::net::TcpListener;
 
         let app = Router::new().route(
-            "/v1/chat/completions",
+            "/v1/messages",
             post(|| async {
                 Json(serde_json::json!({
-                    "id": "chatcmpl-1",
-                    "object": "chat.completion",
+                    "id": "msg_nim_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "nim ok"}],
                     "model": "meta-llama-3.1-405b-instruct",
-                    "choices": [{
-                        "message": {
-                            "role": "assistant",
-                            "content": "nim ok"
-                        },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {
-                        "prompt_tokens": 1,
-                        "completion_tokens": 1,
-                        "total_tokens": 2
-                    }
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
                 }))
             }),
         );
@@ -588,12 +589,8 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
 
-        addr
-    }
-
-    #[tokio::test]
-    async fn test_nvidia_nim_uses_openai_chat_completions_endpoint() {
-        let addr = start_nim_mock_server().await;
+        // base_url has no /v1 suffix, matching the corrected bare-host default —
+        // proves send_message hits {base_url}/v1/messages, not {base_url}/v1/v1/messages.
         let config = ProviderConfig {
             name: "nvidia-nim".to_string(),
             provider_type: "nvidia-nim".to_string(),
@@ -603,7 +600,7 @@ mod tests {
             oauth_provider: None,
             project_id: None,
             location: None,
-            base_url: Some(format!("http://{addr}/v1")),
+            base_url: Some(format!("http://{addr}")),
             models: vec!["meta-llama-3.1-405b-instruct".to_string()],
             enabled: Some(true),
             rate_limit_rpm: Some(40),
@@ -638,6 +635,92 @@ mod tests {
             response.content.as_slice(),
             [ContentBlock::Text { text }] if text == "nim ok"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_nvidia_nim_sends_bearer_auth_header() {
+        // NVIDIA's hosted endpoint expects `Authorization: Bearer <nvapi-key>`,
+        // not `x-api-key` — confirm the actual outbound header, not just
+        // construction/registration.
+        use axum::{http::HeaderMap, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+        use tokio::net::TcpListener;
+
+        let captured_auth = Arc::new(Mutex::new(None::<String>));
+        let captured_auth_clone = captured_auth.clone();
+
+        let app = Router::new().route(
+            "/v1/messages",
+            post(move |headers: HeaderMap| {
+                let captured = captured_auth_clone.clone();
+                async move {
+                    *captured.lock().unwrap() = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    Json(serde_json::json!({
+                        "id": "msg_nim_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "model": "meta-llama-3.1-405b-instruct",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1}
+                    }))
+                }
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let config = ProviderConfig {
+            name: "nvidia-nim".to_string(),
+            provider_type: "nvidia-nim".to_string(),
+            auth_type: Default::default(),
+            supported_beta_options: vec![],
+            api_key: Some("nvapi-test-key".to_string()),
+            oauth_provider: None,
+            project_id: None,
+            location: None,
+            base_url: Some(format!("http://{addr}")),
+            models: vec!["meta-llama-3.1-405b-instruct".to_string()],
+            enabled: Some(true),
+            rate_limit_rpm: None,
+            rate_limit_max_wait_ms: None,
+        };
+
+        let registry = ProviderRegistry::from_configs(&[config], None).unwrap();
+        let provider = registry.get_provider("nvidia-nim").unwrap();
+        let request = AnthropicRequest {
+            model: "meta-llama-3.1-405b-instruct".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("hello".to_string()),
+            }],
+            max_tokens: 64,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        };
+
+        provider.send_message(request).await.unwrap();
+        assert_eq!(
+            captured_auth.lock().unwrap().as_deref(),
+            Some("Bearer nvapi-test-key")
+        );
     }
 
     #[test]

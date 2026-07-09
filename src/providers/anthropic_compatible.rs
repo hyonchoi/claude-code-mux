@@ -1029,8 +1029,9 @@ mod tests {
     #[test]
     fn test_other_providers_keep_x_api_key_by_default() {
         // Regression guard: providers that don't opt into Bearer header style
-        // (anthropic, openrouter, z.ai, minimax, kimi-coding, nvidia-nim) must
-        // keep sending x-api-key under AuthType::ApiKey.
+        // (anthropic, openrouter, z.ai, minimax, kimi-coding) must keep sending
+        // x-api-key under AuthType::ApiKey. nvidia-nim now opts into Bearer
+        // (see registry.rs "nvidia-nim" arm) since it migrated to Anthropic-compat.
         let provider = AnthropicCompatibleProvider::anthropic("key".to_string(), vec![]);
         assert!(!provider.is_bearer_auth());
     }

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Passthrough auth extended to vLLM and SGLang** — bearer token passthrough now works for vLLM and SGLang providers in addition to Anthropic-type providers. Caller-provided tokens are forwarded correctly when using `auth_type = "passthrough"`.
+- **BREAKING: `nvidia-nim` migrated from OpenAI-compatible to Anthropic-compatible** — `provider_type = "nvidia-nim"` now routes through NVIDIA's Anthropic Messages (`/v1/messages`) endpoint instead of OpenAI Chat Completions, authenticating with `Authorization: Bearer <nvapi-key>`. **If you have an explicit `base_url` override ending in `/v1`, drop the suffix** — this provider appends `/v1/messages` itself and a `/v1`-suffixed base_url now 404s (`/v1/v1/messages`). The default `base_url` changed from `https://integrate.api.nvidia.com/v1` to `https://integrate.api.nvidia.com`. `nvidia-nim` is not eligible for passthrough auth (same as `z.ai`/`minimax`/`zenmux`/`kimi-coding`).
 
 ### Fixed
 - **Beta headers note for self-hosted providers** — documentation now warns that `AnthropicCompatibleProvider` injects default `anthropic-beta` headers, which self-hosted vLLM/SGLang endpoints may not recognize. No config option to suppress yet — requires a code fix.
