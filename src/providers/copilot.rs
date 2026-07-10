@@ -850,6 +850,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             metadata: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -1029,6 +1031,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             metadata: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -1188,6 +1192,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             metadata: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };

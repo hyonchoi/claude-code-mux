@@ -2083,6 +2083,8 @@ async fn handle_count_tokens(
         stop_sequences: None,
         stream: None,
         metadata: None,
+        context_management: None,
+        output_config: None,
         passthrough_auth: passthrough_token.clone(),
         anthropic_beta_header: None,
     };
@@ -3291,6 +3293,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         }
