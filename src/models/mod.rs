@@ -25,6 +25,14 @@ pub struct AnthropicRequest {
     pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    /// Context management directives (e.g. clear_thinking_20251015). Passed
+    /// through opaquely so providers that support it (e.g. claude-pt) receive
+    /// the directive and apply it themselves (e.g. strip thinking signatures).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<serde_json::Value>,
+    /// Output configuration (e.g. effort level for extended thinking).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<serde_json::Value>,
     /// Caller-provided bearer token for passthrough mode. Never serialized.
     #[serde(skip)]
     pub passthrough_auth: Option<String>,

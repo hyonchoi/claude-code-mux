@@ -217,6 +217,8 @@ pub fn transform_openai_to_anthropic(
         metadata: None,
         system: system_prompt,
         tools: None, // TODO: Transform tools if needed
+        context_management: None,
+        output_config: None,
         passthrough_auth: None,
         anthropic_beta_header: None,
     })

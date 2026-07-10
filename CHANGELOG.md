@@ -5,6 +5,14 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10-chy] - 2026-07-10
+
+### Fixed
+- **`context_management` and `output_config` fields now pass through to providers** — requests that include Anthropic API fields like `context_management` (e.g. `clear_thinking_20251015`) or `output_config` (e.g. extended thinking effort level) were previously silently dropped because `AnthropicRequest` didn't model them. Both fields are now carried through opaquely so providers that support them receive the directive and apply it themselves. Affects all Anthropic-format providers.
+
+### Added
+- **Unknown request field warnings (deduplication-first)** — a new `warn_unknown_request_fields` check fires once per unknown JSON key per process lifetime and logs `⚠️ Unknown field in request (not forwarded): '<key>'`. Helps catch future Anthropic API additions before they cause silent behavior changes without producing continuous log spam under load. Each key is logged at most once via `OnceLock<DashSet>`.
+
 ## [0.8.9-chy] - 2026-07-09
 
 ### Changed

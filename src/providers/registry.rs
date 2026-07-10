@@ -648,6 +648,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -726,6 +728,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -812,6 +816,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -1214,6 +1220,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -1301,6 +1309,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -1374,6 +1384,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };
@@ -1461,6 +1473,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         };

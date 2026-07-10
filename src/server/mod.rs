@@ -414,6 +414,39 @@ fn normalize_mid_conversation_system(request: &mut AnthropicRequest) {
     normalize_mid_conversation_system_messages(&mut request.messages);
 }
 
+/// Warn about JSON fields that are not modeled in AnthropicRequest. Helps catch
+/// future Anthropic API additions before they cause silent behavior changes.
+/// Each unknown key is logged at most once per process lifetime to avoid log spam.
+fn warn_unknown_request_fields(value: &serde_json::Value) {
+    use std::sync::OnceLock;
+    static SEEN: OnceLock<dashmap::DashSet<String>> = OnceLock::new();
+    let seen = SEEN.get_or_init(dashmap::DashSet::new);
+
+    const KNOWN: &[&str] = &[
+        "model",
+        "messages",
+        "max_tokens",
+        "thinking",
+        "temperature",
+        "top_p",
+        "top_k",
+        "stop_sequences",
+        "stream",
+        "metadata",
+        "system",
+        "tools",
+        "context_management",
+        "output_config",
+    ];
+    if let Some(obj) = value.as_object() {
+        for key in obj.keys() {
+            if !KNOWN.contains(&key.as_str()) && seen.insert(key.clone()) {
+                warn!("⚠️  Unknown field in request (not forwarded): '{}' — update AnthropicRequest to handle it", key);
+            }
+        }
+    }
+}
+
 /// Messages-level normalization shared by `AnthropicRequest` and
 /// `CountTokensRequest` (both carry `Vec<Message>`).
 fn normalize_mid_conversation_system_messages(messages: &mut Vec<Message>) {
@@ -1741,6 +1774,7 @@ async fn handle_messages(
         .map(String::from);
 
     // 1. Parse request for routing decision (mutable for tag extraction)
+    warn_unknown_request_fields(&request_json);
     let mut request_for_routing: AnthropicRequest = serde_json::from_value(request_json.clone())
         .map_err(|e| {
             tracing::error!("❌ Failed to parse request: {}", e);
@@ -2083,6 +2117,8 @@ async fn handle_count_tokens(
         stop_sequences: None,
         stream: None,
         metadata: None,
+        context_management: None,
+        output_config: None,
         passthrough_auth: passthrough_token.clone(),
         anthropic_beta_header: None,
     };
@@ -3291,6 +3327,8 @@ mod tests {
             metadata: None,
             system: None,
             tools: None,
+            context_management: None,
+            output_config: None,
             passthrough_auth: None,
             anthropic_beta_header: None,
         }
