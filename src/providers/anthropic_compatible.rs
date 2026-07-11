@@ -1032,6 +1032,148 @@ mod tests {
         )
     }
 
+    fn make_request(context_management: Option<serde_json::Value>) -> AnthropicRequest {
+        AnthropicRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: MessageContent::Text("hi".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        crate::models::ContentBlock::Thinking {
+                            thinking: "reasoning".to_string(),
+                            signature: "sig".to_string(),
+                        },
+                        crate::models::ContentBlock::RedactedThinking {
+                            data: "redacted".to_string(),
+                        },
+                        crate::models::ContentBlock::Text {
+                            text: "answer".to_string(),
+                            cache_control: None,
+                        },
+                    ]),
+                },
+            ],
+            max_tokens: 1024,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            context_management,
+            output_config: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_strips_thinking_when_present() {
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_thinking_20251015"}]
+        })));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(
+                    &blocks[0],
+                    crate::models::ContentBlock::Text { text, .. } if text == "answer"
+                ));
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_noop_when_absent() {
+        let mut request = make_request(None);
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_ignores_other_edit_types() {
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_tool_uses_20250919"}]
+        })));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_strips_last_assistant_message_too() {
+        // Regression test for ea902ad: an earlier version of this function
+        // skipped the LAST assistant message on the theory that "the current
+        // response relies on its thinking blocks." That was wrong — vLLM/etc.
+        // still reject the fake signature on the last turn too, so all
+        // assistant turns must be stripped uniformly, not just prior ones.
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_thinking_20251015"}]
+        })));
+        // Append a second assistant turn (with its own thinking block) after
+        // the existing user/assistant pair, preceded by a user turn so roles
+        // still alternate.
+        request.messages.push(Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("follow up".to_string()),
+        });
+        request.messages.push(Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                crate::models::ContentBlock::Thinking {
+                    thinking: "more reasoning".to_string(),
+                    signature: "sig2".to_string(),
+                },
+                crate::models::ContentBlock::Text {
+                    text: "final answer".to_string(),
+                    cache_control: None,
+                },
+            ]),
+        });
+
+        apply_clear_thinking_directive(&mut request);
+
+        // First (non-last) assistant message: thinking stripped.
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(blocks
+                    .iter()
+                    .all(|b| !matches!(
+                        b,
+                        crate::models::ContentBlock::Thinking { .. }
+                            | crate::models::ContentBlock::RedactedThinking { .. }
+                    )));
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+
+        // Last assistant message: thinking must ALSO be stripped.
+        match &request.messages[3].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(
+                    &blocks[0],
+                    crate::models::ContentBlock::Text { text, .. } if text == "final answer"
+                ));
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
     #[tokio::test]
     async fn test_get_auth_header_ignores_override_for_api_key_auth() {
         let provider = make_provider();
