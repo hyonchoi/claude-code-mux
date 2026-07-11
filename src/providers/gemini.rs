@@ -209,7 +209,8 @@ impl GeminiProvider {
                                     });
                                 }
                             }
-                            ContentBlock::Thinking { thinking, .. } => {
+                            ContentBlock::Thinking { thinking, .. }
+                            | ContentBlock::RedactedThinking { data: thinking } => {
                                 // Gemini doesn't have thinking blocks, convert to text
                                 parts.push(GeminiPart::Text {
                                     text: thinking.clone(),
@@ -317,7 +318,10 @@ impl GeminiProvider {
             .parts
             .iter()
             .map(|part| match part {
-                GeminiPart::Text { text } => ContentBlock::Text { text: text.clone(), cache_control: None },
+                GeminiPart::Text { text } => ContentBlock::Text {
+                    text: text.clone(),
+                    cache_control: None,
+                },
                 _ => ContentBlock::Text {
                     text: String::new(),
                     cache_control: None,
