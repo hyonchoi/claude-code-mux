@@ -658,7 +658,7 @@ mod tests {
         assert_eq!(response.model, "meta-llama-3.1-405b-instruct");
         assert!(matches!(
             response.content.as_slice(),
-            [ContentBlock::Text { text }] if text == "nim ok"
+            [ContentBlock::Text { text, .. }] if text == "nim ok"
         ));
     }
 
@@ -737,7 +737,7 @@ mod tests {
         let response = provider.send_message(request).await.unwrap();
         assert!(matches!(
             response.content.as_slice(),
-            [ContentBlock::Text { text }] if text == "nim ok"
+            [ContentBlock::Text { text, .. }] if text == "nim ok"
         ));
     }
 
@@ -1230,7 +1230,7 @@ mod tests {
         assert_eq!(response.model, "qwen2.5-72b");
         assert!(matches!(
             response.content.as_slice(),
-            [ContentBlock::Text { text }] if text == "vllm response"
+            [ContentBlock::Text { text, .. }] if text == "vllm response"
         ));
     }
 
@@ -1394,7 +1394,7 @@ mod tests {
         assert_eq!(response.model, "llama-3.1-70b");
         assert!(matches!(
             response.content.as_slice(),
-            [ContentBlock::Text { text }] if text == "sglang response"
+            [ContentBlock::Text { text, .. }] if text == "sglang response"
         ));
     }
 

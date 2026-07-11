@@ -5,13 +5,24 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.11-chy] - 2026-07-11
+
+### Fixed
+- **`cache_control` now preserved on `ToolResultBlock::Text` too** — the previous release fixed `cache_control` dropping on `ContentBlock::Text`, but missed the sibling `ToolResultBlock::Text` variant used inside `tool_result` content arrays. A client-supplied cache checkpoint on that block type was still silently discarded on deserialize/reserialize. Now closed.
+- **`RedactedThinking` no longer leaked as visible text by the Gemini provider** — the Gemini provider was converting `redacted_thinking` blocks to plain visible text, defeating the redaction semantics of that block type. It's now silently skipped, matching Anthropic's intent that redacted content never surface to the client.
+- **Assistant messages that become empty after thinking-block stripping are no longer sent malformed** — `apply_clear_thinking_directive` (added last release) could leave an assistant message with zero content blocks if it consisted solely of thinking blocks. That empty block array is now replaced with empty text to avoid provider-side 400 validation errors.
+- **Stale doc comment corrected** — `apply_clear_thinking_directive`'s doc comment said it stripped "non-last" assistant turns; the code has always stripped all turns including the last. Comment now matches behavior.
+
 ## [0.8.10-chy] - 2026-07-10
 
 ### Fixed
 - **`context_management` and `output_config` fields now pass through to providers** — requests that include Anthropic API fields like `context_management` (e.g. `clear_thinking_20251015`) or `output_config` (e.g. extended thinking effort level) were previously silently dropped because `AnthropicRequest` didn't model them. Both fields are now carried through opaquely so providers that support them receive the directive and apply it themselves. Affects all Anthropic-format providers.
+- **`clear_thinking_20251015` now stripped client-side, including the last assistant turn** — the directive is meant to be applied server-side by Anthropic, but it only clears thinking blocks in cache-checkpointed segments. Prior turns sent as plain strings have no `cache_control`, so Anthropic can't identify them as cached and still validates (and rejects) fake signatures from vLLM. Thinking and redacted-thinking blocks are now stripped from every assistant message client-side — including the most recent one, which an earlier pass had left untouched — before the request reaches the provider.
+- **`cache_control` no longer dropped from tool-result text blocks on the Anthropic round-trip** — `ContentBlock::Text` inside a `tool_result` didn't model `cache_control`, so a client-supplied cache checkpoint on that block was silently discarded during deserialize/reserialize. It's now preserved end-to-end.
 
 ### Added
 - **Unknown request field warnings (deduplication-first)** — a new `warn_unknown_request_fields` check fires once per unknown JSON key per process lifetime and logs `⚠️ Unknown field in request (not forwarded): '<key>'`. Helps catch future Anthropic API additions before they cause silent behavior changes without producing continuous log spam under load. Each key is logged at most once via `OnceLock<DashSet>`.
+- **TRACE-level logging of outgoing request bodies** — with `RUST_LOG=ccm=trace` (or provider-scoped equivalent), each Anthropic-compatible provider now logs the full outgoing JSON request body (both streaming and non-streaming) right before it's sent. Useful for diagnosing provider-specific request shape issues without needing a packet capture.
 
 ## [0.8.9-chy] - 2026-07-09
 

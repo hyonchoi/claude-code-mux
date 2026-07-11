@@ -591,12 +591,59 @@ impl AnthropicCompatibleProvider {
     }
 }
 
+/// Strip thinking blocks from all assistant turns when the request
+/// carries a `clear_thinking_20251015` context_management directive. The
+/// directive is meant to be applied server-side by Anthropic, but it only
+/// clears blocks in cache-checkpointed segments. Prior user turns sent as
+/// plain strings have no cache_control, so Anthropic cannot identify them as
+/// cached and still validates (and rejects) fake signatures from vLLM. We
+/// apply the same transformation client-side so the provider never sees them.
+fn apply_clear_thinking_directive(request: &mut AnthropicRequest) {
+    use crate::models::{ContentBlock, MessageContent};
+
+    let has_directive = request
+        .context_management
+        .as_ref()
+        .and_then(|cm| cm.get("edits"))
+        .and_then(|e| e.as_array())
+        .is_some_and(|edits| {
+            edits.iter().any(|edit| {
+                edit.get("type").and_then(|t| t.as_str()) == Some("clear_thinking_20251015")
+            })
+        });
+
+    if !has_directive {
+        return;
+    }
+
+    // Strip thinking blocks from ALL assistant messages, including the last.
+    for msg in request.messages.iter_mut() {
+        if msg.role != "assistant" {
+            continue;
+        }
+        if let MessageContent::Blocks(blocks) = &mut msg.content {
+            blocks.retain(|b| {
+                !matches!(
+                    b,
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+                )
+            });
+            // If stripping left an empty block array, replace with an empty text
+            // to avoid downstream provider 400 validation errors.
+            if blocks.is_empty() {
+                msg.content = MessageContent::Text(String::new());
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl AnthropicProvider for AnthropicCompatibleProvider {
     async fn send_message(
         &self,
-        request: AnthropicRequest,
+        mut request: AnthropicRequest,
     ) -> Result<ProviderResponse, ProviderError> {
+        apply_clear_thinking_directive(&mut request);
         self.await_rate_limit_permit().await?;
 
         let url = format!("{}/v1/messages", self.base_url);
@@ -698,6 +745,11 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         }
 
         // Send request (pass-through, no transformation needed!)
+        if tracing::enabled!(tracing::Level::TRACE) {
+            if let Ok(json) = serde_json::to_string_pretty(&request) {
+                tracing::trace!("{} outgoing request JSON:\n{}", self.name, json);
+            }
+        }
         let response = req_builder.json(&request).send().await?;
 
         // Check for errors
@@ -795,7 +847,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                 MessageContent::Blocks(blocks) => blocks
                     .iter()
                     .filter_map(|block| match block {
-                        crate::models::ContentBlock::Text { text } => Some(text.clone()),
+                        crate::models::ContentBlock::Text { text, .. } => Some(text.clone()),
                         crate::models::ContentBlock::ToolResult { content, .. } => {
                             Some(content.to_string())
                         }
@@ -819,11 +871,12 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
     async fn send_message_stream(
         &self,
-        request: AnthropicRequest,
+        mut request: AnthropicRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
     {
         use futures::stream::TryStreamExt;
 
+        apply_clear_thinking_directive(&mut request);
         self.await_rate_limit_permit().await?;
 
         let url = format!("{}/v1/messages", self.base_url);
@@ -925,6 +978,11 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         }
 
         // Send request with stream=true
+        if tracing::enabled!(tracing::Level::TRACE) {
+            if let Ok(json) = serde_json::to_string_pretty(&request) {
+                tracing::trace!("{} outgoing stream request JSON:\n{}", self.name, json);
+            }
+        }
         let response = req_builder.json(&request).send().await?;
 
         // Check for errors
@@ -976,6 +1034,192 @@ mod tests {
             None,
             None,
         )
+    }
+
+    fn make_request(context_management: Option<serde_json::Value>) -> AnthropicRequest {
+        AnthropicRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: MessageContent::Text("hi".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        crate::models::ContentBlock::Thinking {
+                            thinking: "reasoning".to_string(),
+                            signature: "sig".to_string(),
+                        },
+                        crate::models::ContentBlock::RedactedThinking {
+                            data: "redacted".to_string(),
+                        },
+                        crate::models::ContentBlock::Text {
+                            text: "answer".to_string(),
+                            cache_control: None,
+                        },
+                    ]),
+                },
+            ],
+            max_tokens: 1024,
+            thinking: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            metadata: None,
+            system: None,
+            tools: None,
+            context_management,
+            output_config: None,
+            passthrough_auth: None,
+            anthropic_beta_header: None,
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_strips_thinking_when_present() {
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_thinking_20251015"}]
+        })));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(
+                    &blocks[0],
+                    crate::models::ContentBlock::Text { text, .. } if text == "answer"
+                ));
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_noop_when_absent() {
+        let mut request = make_request(None);
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_noop_when_edits_missing() {
+        let mut request = make_request(Some(serde_json::json!({"other_key": true})));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_noop_when_edits_not_array() {
+        let mut request = make_request(Some(serde_json::json!({"edits": "not-an-array"})));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_noop_when_edits_empty() {
+        let mut request = make_request(Some(serde_json::json!({"edits": []})));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_skips_text_content_assistant_message() {
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_thinking_20251015"}]
+        })));
+        request.messages.push(Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Text("plain text reply".to_string()),
+        });
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[2].content {
+            MessageContent::Text(text) => assert_eq!(text, "plain text reply"),
+            _ => panic!("Expected Text content to be left untouched"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_ignores_other_edit_types() {
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_tool_uses_20250919"}]
+        })));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_strips_last_assistant_message_too() {
+        // Regression test for ea902ad: an earlier version of this function
+        // skipped the LAST assistant message on the theory that "the current
+        // response relies on its thinking blocks." That was wrong — vLLM/etc.
+        // still reject the fake signature on the last turn too, so all
+        // assistant turns must be stripped uniformly, not just prior ones.
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_thinking_20251015"}]
+        })));
+        // Append a second assistant turn (with its own thinking block) after
+        // the existing user/assistant pair, preceded by a user turn so roles
+        // still alternate.
+        request.messages.push(Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("follow up".to_string()),
+        });
+        request.messages.push(Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                crate::models::ContentBlock::Thinking {
+                    thinking: "more reasoning".to_string(),
+                    signature: "sig2".to_string(),
+                },
+                crate::models::ContentBlock::Text {
+                    text: "final answer".to_string(),
+                    cache_control: None,
+                },
+            ]),
+        });
+
+        apply_clear_thinking_directive(&mut request);
+
+        // First (non-last) assistant message: thinking stripped.
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(blocks.iter().all(|b| !matches!(
+                    b,
+                    crate::models::ContentBlock::Thinking { .. }
+                        | crate::models::ContentBlock::RedactedThinking { .. }
+                )));
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+
+        // Last assistant message: thinking must ALSO be stripped.
+        match &request.messages[3].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(
+                    &blocks[0],
+                    crate::models::ContentBlock::Text { text, .. } if text == "final answer"
+                ));
+            }
+            _ => panic!("Expected Blocks content"),
+        }
     }
 
     #[tokio::test]
