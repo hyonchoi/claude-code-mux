@@ -366,7 +366,7 @@ fn system_message_to_reminder(msg: &Message) -> Option<ContentBlock> {
             let text = blocks
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::Text { text, cache_control: None } => Some(text.as_str()),
+                    ContentBlock::Text { text, .. } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
