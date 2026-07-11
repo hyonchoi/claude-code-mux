@@ -209,12 +209,14 @@ impl GeminiProvider {
                                     });
                                 }
                             }
-                            ContentBlock::Thinking { thinking, .. }
-                            | ContentBlock::RedactedThinking { data: thinking } => {
+                            ContentBlock::Thinking { thinking, .. } => {
                                 // Gemini doesn't have thinking blocks, convert to text
                                 parts.push(GeminiPart::Text {
                                     text: thinking.clone(),
                                 });
+                            }
+                            ContentBlock::RedactedThinking { .. } => {
+                                // Redacted thinking should NOT be shown — skip silently
                             }
                             _ => {
                                 // Skip tool use/result for now

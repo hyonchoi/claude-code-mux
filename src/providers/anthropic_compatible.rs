@@ -628,6 +628,11 @@ fn apply_clear_thinking_directive(request: &mut AnthropicRequest) {
                     ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
                 )
             });
+            // If stripping left an empty block array, replace with an empty text
+            // to avoid downstream provider 400 validation errors.
+            if blocks.is_empty() {
+                msg.content = MessageContent::Text(String::new());
+            }
         }
     }
 }
