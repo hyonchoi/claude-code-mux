@@ -642,7 +642,7 @@ impl AnthropicProvider for CopilotProvider {
                 MessageContent::Blocks(blocks) => blocks
                     .iter()
                     .filter_map(|b| match b {
-                        crate::models::ContentBlock::Text { text } => Some(text.clone()),
+                        crate::models::ContentBlock::Text { text, .. } => Some(text.clone()),
                         crate::models::ContentBlock::ToolResult { content, .. } => {
                             Some(content.to_string())
                         }

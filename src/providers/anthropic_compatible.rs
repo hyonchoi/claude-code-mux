@@ -795,7 +795,7 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
                 MessageContent::Blocks(blocks) => blocks
                     .iter()
                     .filter_map(|block| match block {
-                        crate::models::ContentBlock::Text { text } => Some(text.clone()),
+                        crate::models::ContentBlock::Text { text, .. } => Some(text.clone()),
                         crate::models::ContentBlock::ToolResult { content, .. } => {
                             Some(content.to_string())
                         }

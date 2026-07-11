@@ -193,7 +193,7 @@ impl GeminiProvider {
                     let mut parts = Vec::new();
                     for block in blocks {
                         match block {
-                            ContentBlock::Text { text } => {
+                            ContentBlock::Text { text, .. } => {
                                 parts.push(GeminiPart::Text { text: text.clone() });
                             }
                             ContentBlock::Image { source } => {
@@ -317,9 +317,10 @@ impl GeminiProvider {
             .parts
             .iter()
             .map(|part| match part {
-                GeminiPart::Text { text } => ContentBlock::Text { text: text.clone() },
+                GeminiPart::Text { text } => ContentBlock::Text { text: text.clone(), cache_control: None },
                 _ => ContentBlock::Text {
                     text: String::new(),
+                    cache_control: None,
                 },
             })
             .collect();

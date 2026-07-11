@@ -113,7 +113,11 @@ pub enum ToolResultBlock {
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<serde_json::Value>,
+    },
     #[serde(rename = "image")]
     Image { source: ImageSource },
     #[serde(rename = "tool_use")]
@@ -129,6 +133,8 @@ pub enum ContentBlock {
     },
     #[serde(rename = "thinking")]
     Thinking { thinking: String, signature: String },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
 }
 
 /// Image source for vision API
@@ -217,5 +223,18 @@ impl std::fmt::Display for RouteType {
             RouteType::Background => write!(f, "background"),
             RouteType::Default => write!(f, "default"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_content_block_cache_control_roundtrip() {
+        let json = r#"{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"hi","type":"text"}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        let out = serde_json::to_string(&block).unwrap();
+        assert!(out.contains("cache_control"), "cache_control missing from output: {}", out);
     }
 }
