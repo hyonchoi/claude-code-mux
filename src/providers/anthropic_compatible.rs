@@ -591,12 +591,61 @@ impl AnthropicCompatibleProvider {
     }
 }
 
+/// Strip thinking blocks from all non-last assistant turns when the request
+/// carries a `clear_thinking_20251015` context_management directive. The
+/// directive is meant to be applied server-side by Anthropic, but it only
+/// clears blocks in cache-checkpointed segments. Prior user turns sent as
+/// plain strings have no cache_control, so Anthropic cannot identify them as
+/// cached and still validates (and rejects) fake signatures from vLLM. We
+/// apply the same transformation client-side so the provider never sees them.
+fn apply_clear_thinking_directive(request: &mut AnthropicRequest) {
+    use crate::models::{ContentBlock, MessageContent};
+
+    let has_directive = request
+        .context_management
+        .as_ref()
+        .and_then(|cm| cm.get("edits"))
+        .and_then(|e| e.as_array())
+        .is_some_and(|edits| {
+            edits.iter().any(|edit| {
+                edit.get("type").and_then(|t| t.as_str())
+                    == Some("clear_thinking_20251015")
+            })
+        });
+
+    if !has_directive {
+        return;
+    }
+
+    // Find the index of the last assistant message so we can leave its
+    // thinking blocks intact (the current response relies on them).
+    let last_assistant_idx = request
+        .messages
+        .iter()
+        .rposition(|m| m.role == "assistant");
+
+    for (i, msg) in request.messages.iter_mut().enumerate() {
+        if msg.role != "assistant" || Some(i) == last_assistant_idx {
+            continue;
+        }
+        if let MessageContent::Blocks(blocks) = &mut msg.content {
+            blocks.retain(|b| {
+                !matches!(
+                    b,
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+                )
+            });
+        }
+    }
+}
+
 #[async_trait]
 impl AnthropicProvider for AnthropicCompatibleProvider {
     async fn send_message(
         &self,
-        request: AnthropicRequest,
+        mut request: AnthropicRequest,
     ) -> Result<ProviderResponse, ProviderError> {
+        apply_clear_thinking_directive(&mut request);
         self.await_rate_limit_permit().await?;
 
         let url = format!("{}/v1/messages", self.base_url);
@@ -819,11 +868,12 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
 
     async fn send_message_stream(
         &self,
-        request: AnthropicRequest,
+        mut request: AnthropicRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, ProviderError>> + Send>>, ProviderError>
     {
         use futures::stream::TryStreamExt;
 
+        apply_clear_thinking_directive(&mut request);
         self.await_rate_limit_permit().await?;
 
         let url = format!("{}/v1/messages", self.base_url);
