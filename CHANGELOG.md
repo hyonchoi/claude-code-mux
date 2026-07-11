@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **`context_management` and `output_config` fields now pass through to providers** — requests that include Anthropic API fields like `context_management` (e.g. `clear_thinking_20251015`) or `output_config` (e.g. extended thinking effort level) were previously silently dropped because `AnthropicRequest` didn't model them. Both fields are now carried through opaquely so providers that support them receive the directive and apply it themselves. Affects all Anthropic-format providers.
+- **`clear_thinking_20251015` now stripped client-side, including the last assistant turn** — the directive is meant to be applied server-side by Anthropic, but it only clears thinking blocks in cache-checkpointed segments. Prior turns sent as plain strings have no `cache_control`, so Anthropic can't identify them as cached and still validates (and rejects) fake signatures from vLLM. Thinking and redacted-thinking blocks are now stripped from every assistant message client-side — including the most recent one, which an earlier pass had left untouched — before the request reaches the provider.
+- **`cache_control` no longer dropped from tool-result text blocks on the Anthropic round-trip** — `ContentBlock::Text` inside a `tool_result` didn't model `cache_control`, so a client-supplied cache checkpoint on that block was silently discarded during deserialize/reserialize. It's now preserved end-to-end.
 
 ### Added
 - **Unknown request field warnings (deduplication-first)** — a new `warn_unknown_request_fields` check fires once per unknown JSON key per process lifetime and logs `⚠️ Unknown field in request (not forwarded): '<key>'`. Helps catch future Anthropic API additions before they cause silent behavior changes without producing continuous log spam under load. Each key is logged at most once via `OnceLock<DashSet>`.
+- **TRACE-level logging of outgoing request bodies** — with `RUST_LOG=ccm=trace` (or provider-scoped equivalent), each Anthropic-compatible provider now logs the full outgoing JSON request body (both streaming and non-streaming) right before it's sent. Useful for diagnosing provider-specific request shape issues without needing a packet capture.
 
 ## [0.8.9-chy] - 2026-07-09
 
