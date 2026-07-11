@@ -850,7 +850,8 @@ impl OpenAIProvider {
                             crate::models::ContentBlock::ToolResult { .. } => {
                                 // Will be handled as separate messages below
                             }
-                            crate::models::ContentBlock::Thinking { .. } | crate::models::ContentBlock::RedactedThinking { .. } => {
+                            crate::models::ContentBlock::Thinking { .. }
+                            | crate::models::ContentBlock::RedactedThinking { .. } => {
                                 // OpenAI doesn't have thinking blocks, skip
                             }
                         }
@@ -978,7 +979,10 @@ impl OpenAIProvider {
 
         let mut content = Vec::new();
         if !text.is_empty() {
-            content.push(ContentBlock::Text { text, cache_control: None });
+            content.push(ContentBlock::Text {
+                text,
+                cache_control: None,
+            });
         }
 
         if let Some(tool_calls) = choice.message.tool_calls {
@@ -1062,7 +1066,10 @@ impl OpenAIProvider {
             id: response.id,
             r#type: "message".to_string(),
             role: "assistant".to_string(),
-            content: vec![ContentBlock::Text { text, cache_control: None }],
+            content: vec![ContentBlock::Text {
+                text,
+                cache_control: None,
+            }],
             model: response.model,
             stop_reason: Some("end_turn".to_string()),
             stop_sequence: None,

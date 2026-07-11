@@ -129,7 +129,10 @@ pub fn transform_openai_to_anthropic(
                                 .filter_map(|part| {
                                     match part {
                                         OpenAIContentPart::Text { text } => {
-                                            Some(ContentBlock::Text { text: text.clone(), cache_control: None })
+                                            Some(ContentBlock::Text {
+                                                text: text.clone(),
+                                                cache_control: None,
+                                            })
                                         }
                                         OpenAIContentPart::ImageUrl { image_url } => {
                                             // Parse data URL or external URL

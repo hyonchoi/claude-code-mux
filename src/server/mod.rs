@@ -396,7 +396,10 @@ fn system_message_to_reminder(msg: &Message) -> Option<ContentBlock> {
         let safe = system_text.replace("</system-reminder>", "<\\/system-reminder>");
         format!("<system-reminder>\n{}\n</system-reminder>", safe)
     };
-    Some(ContentBlock::Text { text: wrapped, cache_control: None })
+    Some(ContentBlock::Text {
+        text: wrapped,
+        cache_control: None,
+    })
 }
 
 /// Normalize mid-conversation `role:"system"` messages into user-role
@@ -3357,8 +3360,14 @@ mod tests {
         match &req.messages[0].content {
             MessageContent::Blocks(blocks) => {
                 assert_eq!(blocks.len(), 2);
-                assert!(matches!(&blocks[0], ContentBlock::Text { text, cache_control: None } if text == "hello"));
-                if let ContentBlock::Text { text, cache_control: None } = &blocks[1] {
+                assert!(
+                    matches!(&blocks[0], ContentBlock::Text { text, cache_control: None } if text == "hello")
+                );
+                if let ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                } = &blocks[1]
+                {
                     assert!(text.contains("<system-reminder>"));
                     assert!(text.contains("hook context"));
                     assert!(text.contains("</system-reminder>"));
@@ -3388,7 +3397,11 @@ mod tests {
         assert_eq!(req.messages[0].role, "user");
         match &req.messages[0].content {
             MessageContent::Blocks(blocks) => {
-                if let ContentBlock::Text { text, cache_control: None } = &blocks[0] {
+                if let ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                } = &blocks[0]
+                {
                     assert!(text.contains("<system-reminder>"));
                     assert!(text.contains("hook"));
                     assert!(text.contains("</system-reminder>"));
@@ -3426,7 +3439,10 @@ mod tests {
             MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::Text { text, cache_control: None } => Some(text.as_str()),
+                    ContentBlock::Text {
+                        text,
+                        cache_control: None,
+                    } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -3463,9 +3479,10 @@ mod tests {
                 let reminder_text = blocks
                     .iter()
                     .filter_map(|b| match b {
-                        ContentBlock::Text { text, cache_control: None } if text.contains("<system-reminder>") => {
-                            Some(text.clone())
-                        }
+                        ContentBlock::Text {
+                            text,
+                            cache_control: None,
+                        } if text.contains("<system-reminder>") => Some(text.clone()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -3523,7 +3540,11 @@ mod tests {
                 }
                 MessageContent::Blocks(blocks) => {
                     for b in blocks {
-                        if let ContentBlock::Text { text, cache_control: None } = b {
+                        if let ContentBlock::Text {
+                            text,
+                            cache_control: None,
+                        } = b
+                        {
                             assert!(
                                 !text.contains("<system-reminder><system-reminder>"),
                                 "Should not double-wrap: {}",
@@ -3570,17 +3591,29 @@ mod tests {
                     "both system messages should be blocks in the same user turn"
                 );
                 for block in blocks {
-                    if let ContentBlock::Text { text, cache_control: None } = block {
+                    if let ContentBlock::Text {
+                        text,
+                        cache_control: None,
+                    } = block
+                    {
                         assert!(text.contains("<system-reminder>"));
                     } else {
                         panic!("Expected Text blocks");
                     }
                 }
                 // hook1 comes before hook2
-                if let ContentBlock::Text { text, cache_control: None } = &blocks[0] {
+                if let ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                } = &blocks[0]
+                {
                     assert!(text.contains("hook1"));
                 }
-                if let ContentBlock::Text { text, cache_control: None } = &blocks[1] {
+                if let ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                } = &blocks[1]
+                {
                     assert!(text.contains("hook2"));
                 }
             }
@@ -3642,7 +3675,11 @@ mod tests {
         match &req.messages[0].content {
             MessageContent::Blocks(blocks) => {
                 assert_eq!(blocks.len(), 2);
-                if let ContentBlock::Text { text, cache_control: None } = &blocks[0] {
+                if let ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                } = &blocks[0]
+                {
                     assert!(text.contains("<system-reminder>"));
                     assert!(text.contains("hook ctx"));
                 } else {
@@ -3779,8 +3816,12 @@ mod tests {
         // Trailing user got the reminder prepended before its text.
         match &req.messages[2].content {
             MessageContent::Blocks(blocks) => {
-                assert!(matches!(&blocks[0], ContentBlock::Text { text, cache_control: None } if text.contains("hook")));
-                assert!(matches!(&blocks[1], ContentBlock::Text { text, cache_control: None } if text == "second"));
+                assert!(
+                    matches!(&blocks[0], ContentBlock::Text { text, cache_control: None } if text.contains("hook"))
+                );
+                assert!(
+                    matches!(&blocks[1], ContentBlock::Text { text, cache_control: None } if text == "second")
+                );
             }
             _ => panic!("Expected Blocks content for trailing user"),
         }
@@ -3832,7 +3873,10 @@ mod tests {
                 let merged = blocks
                     .iter()
                     .filter_map(|b| match b {
-                        ContentBlock::Text { text, cache_control: None } => Some(text.as_str()),
+                        ContentBlock::Text {
+                            text,
+                            cache_control: None,
+                        } => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -3865,9 +3909,10 @@ mod tests {
                 let reminder = blocks
                     .iter()
                     .find_map(|b| match b {
-                        ContentBlock::Text { text, cache_control: None } if text.contains("<system-reminder>") => {
-                            Some(text.clone())
-                        }
+                        ContentBlock::Text {
+                            text,
+                            cache_control: None,
+                        } if text.contains("<system-reminder>") => Some(text.clone()),
                         _ => None,
                     })
                     .expect("reminder block not found");
