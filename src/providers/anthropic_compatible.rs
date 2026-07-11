@@ -591,7 +591,7 @@ impl AnthropicCompatibleProvider {
     }
 }
 
-/// Strip thinking blocks from all non-last assistant turns when the request
+/// Strip thinking blocks from all assistant turns when the request
 /// carries a `clear_thinking_20251015` context_management directive. The
 /// directive is meant to be applied server-side by Anthropic, but it only
 /// clears blocks in cache-checkpointed segments. Prior user turns sent as
@@ -608,8 +608,7 @@ fn apply_clear_thinking_directive(request: &mut AnthropicRequest) {
         .and_then(|e| e.as_array())
         .is_some_and(|edits| {
             edits.iter().any(|edit| {
-                edit.get("type").and_then(|t| t.as_str())
-                    == Some("clear_thinking_20251015")
+                edit.get("type").and_then(|t| t.as_str()) == Some("clear_thinking_20251015")
             })
         });
 
@@ -1103,6 +1102,52 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_clear_thinking_directive_noop_when_edits_missing() {
+        let mut request = make_request(Some(serde_json::json!({"other_key": true})));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_noop_when_edits_not_array() {
+        let mut request = make_request(Some(serde_json::json!({"edits": "not-an-array"})));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_noop_when_edits_empty() {
+        let mut request = make_request(Some(serde_json::json!({"edits": []})));
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[1].content {
+            MessageContent::Blocks(blocks) => assert_eq!(blocks.len(), 3),
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_apply_clear_thinking_directive_skips_text_content_assistant_message() {
+        let mut request = make_request(Some(serde_json::json!({
+            "edits": [{"type": "clear_thinking_20251015"}]
+        })));
+        request.messages.push(Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Text("plain text reply".to_string()),
+        });
+        apply_clear_thinking_directive(&mut request);
+        match &request.messages[2].content {
+            MessageContent::Text(text) => assert_eq!(text, "plain text reply"),
+            _ => panic!("Expected Text content to be left untouched"),
+        }
+    }
+
+    #[test]
     fn test_apply_clear_thinking_directive_ignores_other_edit_types() {
         let mut request = make_request(Some(serde_json::json!({
             "edits": [{"type": "clear_tool_uses_20250919"}]
@@ -1150,13 +1195,11 @@ mod tests {
         // First (non-last) assistant message: thinking stripped.
         match &request.messages[1].content {
             MessageContent::Blocks(blocks) => {
-                assert!(blocks
-                    .iter()
-                    .all(|b| !matches!(
-                        b,
-                        crate::models::ContentBlock::Thinking { .. }
-                            | crate::models::ContentBlock::RedactedThinking { .. }
-                    )));
+                assert!(blocks.iter().all(|b| !matches!(
+                    b,
+                    crate::models::ContentBlock::Thinking { .. }
+                        | crate::models::ContentBlock::RedactedThinking { .. }
+                )));
             }
             _ => panic!("Expected Blocks content"),
         }
