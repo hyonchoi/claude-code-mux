@@ -5,6 +5,14 @@ All notable changes to Claude Code Mux will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.11-chy] - 2026-07-11
+
+### Fixed
+- **`cache_control` now preserved on `ToolResultBlock::Text` too** — the previous release fixed `cache_control` dropping on `ContentBlock::Text`, but missed the sibling `ToolResultBlock::Text` variant used inside `tool_result` content arrays. A client-supplied cache checkpoint on that block type was still silently discarded on deserialize/reserialize. Now closed.
+- **`RedactedThinking` no longer leaked as visible text by the Gemini provider** — the Gemini provider was converting `redacted_thinking` blocks to plain visible text, defeating the redaction semantics of that block type. It's now silently skipped, matching Anthropic's intent that redacted content never surface to the client.
+- **Assistant messages that become empty after thinking-block stripping are no longer sent malformed** — `apply_clear_thinking_directive` (added last release) could leave an assistant message with zero content blocks if it consisted solely of thinking blocks. That empty block array is now replaced with empty text to avoid provider-side 400 validation errors.
+- **Stale doc comment corrected** — `apply_clear_thinking_directive`'s doc comment said it stripped "non-last" assistant turns; the code has always stripped all turns including the last. Comment now matches behavior.
+
 ## [0.8.10-chy] - 2026-07-10
 
 ### Fixed
