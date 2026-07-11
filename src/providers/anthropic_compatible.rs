@@ -617,15 +617,9 @@ fn apply_clear_thinking_directive(request: &mut AnthropicRequest) {
         return;
     }
 
-    // Find the index of the last assistant message so we can leave its
-    // thinking blocks intact (the current response relies on them).
-    let last_assistant_idx = request
-        .messages
-        .iter()
-        .rposition(|m| m.role == "assistant");
-
-    for (i, msg) in request.messages.iter_mut().enumerate() {
-        if msg.role != "assistant" || Some(i) == last_assistant_idx {
+    // Strip thinking blocks from ALL assistant messages, including the last.
+    for msg in request.messages.iter_mut() {
+        if msg.role != "assistant" {
             continue;
         }
         if let MessageContent::Blocks(blocks) = &mut msg.content {
