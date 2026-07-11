@@ -747,6 +747,11 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         }
 
         // Send request (pass-through, no transformation needed!)
+        if tracing::enabled!(tracing::Level::TRACE) {
+            if let Ok(json) = serde_json::to_string_pretty(&request) {
+                tracing::trace!("{} outgoing request JSON:\n{}", self.name, json);
+            }
+        }
         let response = req_builder.json(&request).send().await?;
 
         // Check for errors
@@ -975,6 +980,11 @@ impl AnthropicProvider for AnthropicCompatibleProvider {
         }
 
         // Send request with stream=true
+        if tracing::enabled!(tracing::Level::TRACE) {
+            if let Ok(json) = serde_json::to_string_pretty(&request) {
+                tracing::trace!("{} outgoing stream request JSON:\n{}", self.name, json);
+            }
+        }
         let response = req_builder.json(&request).send().await?;
 
         // Check for errors
